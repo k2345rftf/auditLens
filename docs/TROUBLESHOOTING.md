@@ -84,6 +84,39 @@ docker compose logs postgres  # смотрим что в логах
 
 ---
 
+### `dependency failed to start: container auditlens-postgres is unhealthy`
+
+**Симптом:** при `bash scripts/setup.sh` или `docker compose up -d`:
+```
+[+] up 1/1
+✘ Container auditlens-postgres   Error dependency postgres failed to start
+dependency failed to start: container auditlens-postgres is unhealthy
+```
+
+**Причина (90% случаев):** в старой версии `docker-compose.yml` была локаль `ru_RU.UTF-8` в `POSTGRES_INITDB_ARGS`, но её нет в образе `pgvector/pgvector:pg16` (Debian-slim). `initdb` падает → healthcheck не проходит.
+
+**Решение:**
+```bash
+git pull                       # подтяни актуальный docker-compose.yml (локаль теперь C.UTF-8)
+docker compose down -v         # ⚠ удалит старый кривой volume с данными
+docker compose up -d
+bash scripts/setup.sh init-db  # пересоздать таблицы
+```
+
+Если после `git pull` всё равно та же ошибка — посмотри что в логе:
+```bash
+docker compose logs --tail=50 postgres
+```
+
+Возможные варианты:
+- `FATAL: data directory "/var/lib/postgresql/data" has invalid permissions` → пересоздай volume: `docker compose down -v`
+- `Address already in use` (порт 5432) → останови локальный postgres:
+  - mac: `brew services stop postgresql@16`
+  - linux: `sudo systemctl stop postgresql`
+- `database files are incompatible with server` → старая major-версия в volume: `docker compose down -v`
+
+---
+
 ### `extension "vector" is not available`
 
 **Симптом:** на миграции 005 — `ERROR: extension "vector" is not available`.

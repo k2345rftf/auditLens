@@ -90,7 +90,7 @@ setup_venv() {
 # ── Docker (PostgreSQL + SearXNG) ────────────────────────────────────────
 setup_docker() {
     info "Поднимаю PostgreSQL + SearXNG через docker compose…"
-    docker compose up -d
+    docker compose up -d 2>&1 | tail -10
     info "Жду пока Postgres станет healthy…"
     for i in {1..30}; do
         if docker compose exec -T postgres pg_isready -U audit -d bank_audit >/dev/null 2>&1; then
@@ -99,7 +99,13 @@ setup_docker() {
         fi
         sleep 2
     done
-    error "Postgres не поднялся за 60s. Посмотри логи: docker compose logs postgres"
+    error "Postgres не поднялся за 60s. Логи контейнера (последние 30 строк):"
+    docker compose logs --tail=30 postgres
+    echo
+    warn "Типовые причины:"
+    warn "  • Порт 5432 занят локальным postgres: brew services stop postgresql@16 (mac)"
+    warn "  • Контейнер с конфликтом локали — обнови репо: git pull"
+    warn "  • Сломан volume — пересоздай: docker compose down -v && bash scripts/setup.sh"
     exit 1
 }
 
