@@ -200,14 +200,42 @@ def _search_db_chunks(query_vec: list[float], entity: Entity,
 
 # ── Lane B + C: live web-search + direct URLs ───────────────────────────
 def _search_web_for_entity(entity: Entity, max_per_query: int = 5) -> list[str]:
-    """Параллельные web-search запросы, возвращает уникальные URL'ы."""
+    """Параллельные web-search запросы, возвращает уникальные URL'ы.
+
+    Стратегия (приоритет сверху вниз):
+    1. Bank-сайт с продуктом + основные synonyms (3-5 запросов)
+    2. АГРЕГАТОРЫ: banki.ru/sravni.ru — у них специальные обзорные страницы
+       по продуктам и сравнения. Goldmine для сравнительных вопросов.
+    3. Generic поиск с фильтром «не бизнес» для личных продуктов.
+    """
     queries = []
+    product = entity.product
+    # Top-2 наиболее распространённых synonyms (помимо основного product)
+    extra_terms = [s for s in (entity.product_synonyms or [])
+                   if s and s.lower() != product.lower() and len(s) >= 4][:2]
+
+    # 1. Bank-сайт с разными вариантами product
     if entity.bank_domain:
-        queries.append(f"site:{entity.bank_domain} {entity.product}")
-        queries.append(f"site:{entity.bank_domain} {entity.product} тарифы")
-        queries.append(f"site:{entity.bank_domain} {entity.product} filetype:pdf")
-    queries.append(f"{entity.bank_name} {entity.product} условия тарифы")
-    queries.append(f"{entity.bank_name} {entity.product} site:banki.ru")
+        queries.append(f"site:{entity.bank_domain} {product}")
+        for syn in extra_terms:
+            queries.append(f"site:{entity.bank_domain} {syn}")
+        queries.append(f"site:{entity.bank_domain} {product} тарифы")
+
+    # 2. Агрегаторы — обзорные страницы, рейтинги
+    queries.append(f"site:banki.ru {product} {entity.bank_name}")
+    queries.append(f"site:sravni.ru {product} {entity.bank_name}")
+    # Обзорная статья «топ N» — обычно с конкретикой
+    queries.append(f"{product} обзор условия {entity.bank_name}")
+
+    # 3. Negative-keyword filter: если product указывает на личный сегмент,
+    # исключаем бизнес/корпоратив, и наоборот
+    p_low = product.lower()
+    is_personal = any(k in p_low for k in ["пенсион", "ветеран", "для физ", "детск", "молод"])
+    is_business = any(k in p_low for k in ["ип", "бизнес", "юр", "эквайринг", "рко"])
+    if is_personal:
+        queries.append(f"{entity.bank_name} {product} -бизнес -ИП -корпоратив")
+    elif is_business:
+        queries.append(f"{entity.bank_name} {product} ИП тарифы")
 
     urls: list[str] = []
     seen: set[str] = set()
@@ -221,6 +249,8 @@ def _search_web_for_entity(entity: Entity, max_per_query: int = 5) -> list[str]:
             u = r.get("url")
             if u and u not in seen:
                 seen.add(u); urls.append(u)
+    log.warning("[source_finder] %s: %s web URLs after %s queries",
+                 entity.bank_slug, len(urls), len(queries))
     return urls
 
 
@@ -295,11 +325,11 @@ async def find_gold_sources(client: AsyncOpenAI, entity: Entity,
     log.info("[source_finder] %s: %s DB sources from HyDE (after topic-filter)",
              entity.bank_slug, len(db_sources))
 
-    # On-topic: gold_score >= 0.5 И значит topic есть в тексте (см. _enrich_source)
-    on_topic = [s for s in db_sources if s.gold_score >= 0.5]
+    # On-topic: gold_score >= 0.3 (мягкий порог — лучше слабый источник
+    # чем 0). Главный фильтр в _enrich_source уже отфильтровал по topic-keywords.
+    on_topic = [s for s in db_sources if s.gold_score >= 0.3]
 
     # КРИТИЧНО: если on-topic < top_n → web search ОБЯЗАТЕЛЬНО.
-    # Раньше web search запускался по low confidence, теперь — по topic-coverage.
     if len(on_topic) < top_n:
         log.warning("[source_finder] %s: only %s on-topic in DB → live web search",
                     entity.bank_slug, len(on_topic))

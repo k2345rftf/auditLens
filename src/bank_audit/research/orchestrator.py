@@ -235,14 +235,64 @@ async def stream_eav_research(question: str,
                     "tool": "triple_extractor", "entity": e.bank_slug})
 
     async def extract_one(e: Entity) -> tuple[Entity, list[Triple]]:
+        """Extract с двойной попыткой: если 0 triples — переформулируем
+        product (например, «пенсионная карта» → «дебетовая карта для пенсионеров»)
+        и пробуем ещё раз через source_finder + extract."""
         srcs = sources_per_entity.get(e.bank_slug, [])
-        if not srcs:
-            return e, []
-        try:
-            triples = await extract_triples(client, e, srcs)
-        except Exception as ex:
-            log.warning("extract_triples failed for %s: %s", e.bank_slug, ex)
-            triples = []
+        triples = []
+        if srcs:
+            try:
+                triples = await extract_triples(client, e, srcs)
+            except Exception as ex:
+                log.warning("extract_triples failed for %s: %s", e.bank_slug, ex)
+
+        # SECOND CHANCE: если 0 triples — пробуем переформулировать продукт
+        # на более общий + специфичный для audience синоним
+        if not triples and e.product_synonyms:
+            # Берём 1-2 наиболее «общих» синонима (короткие или известные термины)
+            general_syn = sorted(e.product_synonyms,
+                                  key=lambda s: (s.lower() == e.product.lower(), len(s)))
+            # Создаём alt-entity с другим product
+            for alt_product in general_syn[:2]:
+                if alt_product.lower() == e.product.lower():
+                    continue
+                alt_e = Entity(
+                    bank_slug=e.bank_slug, bank_name=e.bank_name,
+                    bank_domain=e.bank_domain, product=alt_product,
+                    product_synonyms=e.product_synonyms,
+                    audience=e.audience,
+                )
+                log.warning("[orchestrator] %s: 0 triples → retry with product=%r",
+                             e.bank_slug, alt_product)
+                try:
+                    alt_srcs = await find_gold_sources(client, alt_e, top_n=3)
+                    if alt_srcs:
+                        # Обновляем sources_per_entity для глобального index
+                        sources_per_entity[e.bank_slug] = alt_srcs
+                        srcs = alt_srcs
+                        triples = await extract_triples(client, alt_e, alt_srcs)
+                        if triples:
+                            # Подменяем bank_slug в триплах на оригинальный entity
+                            for t in triples:
+                                t.entity_bank_slug = e.bank_slug
+                            break
+                except Exception as ex:
+                    log.info("retry failed for %s with %r: %s",
+                              e.bank_slug, alt_product, ex)
+
+        # Если всё ещё 0 — честная пометка (audit-grade transparency)
+        if not triples:
+            t = Triple(
+                entity_bank_slug=e.bank_slug,
+                attribute="продукт_доступен",
+                value="не найден в открытых источниках" if srcs else "не найдены источники",
+                unit="", value_numeric=None,
+                source_idx=1 if srcs else 0,
+                source_url=srcs[0].url if srcs else "",
+                excerpt="Возможно банк не предлагает специальный продукт или информация не публикуется",
+                confidence="low",
+            )
+            triples = [t]
         return e, triples
 
     triple_results = await asyncio.gather(
