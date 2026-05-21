@@ -49,6 +49,59 @@ _ANSWER_RE = re.compile(r"<answer>([\s\S]*?)(?:</answer>|$)", re.IGNORECASE)
 _THINK_END_RE = re.compile(r"</think>|</reasoning>|<\|end_thinking\|>", re.IGNORECASE)
 
 
+def _format_llm_error(e: Exception, stage: str = "LLM-вызов") -> str:
+    """User-friendly markdown-сообщение об LLM-ошибке.
+
+    Распознаёт типовые случаи Fireworks/OpenAI:
+      • 401 — невалидный/отозванный ключ
+      • 402/412 — Account suspended / закончились кредиты
+      • 403 — content-policy / region-block
+      • 404 — модель не существует
+      • 429 — rate-limit
+      • 5xx — серверная ошибка провайдера
+      • timeout — таймаут
+      • connection — нет сети до провайдера
+    """
+    msg = str(e)
+    low = msg.lower()
+    s = stage
+    # Detection
+    if "401" in msg or "invalid_api_key" in low or "authentication" in low:
+        return (f"\n\n⚠ **Ошибка {s}: невалидный API-ключ Fireworks**\n\n"
+                f"Проверь `LLM_API_KEY` в `.env`. Получи новый: "
+                f"[fireworks.ai/account/api-keys](https://fireworks.ai/account/api-keys).\n")
+    if "402" in msg or "412" in msg or "suspended" in low or "insufficient" in low or "billing" in low or "credit" in low:
+        return (f"\n\n⚠ **Ошибка {s}: закончились кредиты Fireworks**\n\n"
+                f"Аккаунт приостановлен — пополни баланс на "
+                f"[fireworks.ai/account/billing](https://fireworks.ai/account/billing) "
+                f"(минимум $5 ≈ 25–50 deep-research'ей) или смени `LLM_API_KEY`.\n\n"
+                f"Технические детали: `{msg[:200]}`\n")
+    if "403" in msg or "content" in low and "policy" in low:
+        return (f"\n\n⚠ **Ошибка {s}: запрос отклонён content-policy LLM**\n\n"
+                f"Попробуй переформулировать вопрос или сменить модель "
+                f"(`LLM_MODEL_NAME` в `.env`).\n\n"
+                f"Детали: `{msg[:200]}`\n")
+    if "404" in msg or "model" in low and "not found" in low:
+        return (f"\n\n⚠ **Ошибка {s}: модель не найдена на Fireworks**\n\n"
+                f"Возможно модель снята. Проверь список: "
+                f"`curl -H \"Authorization: Bearer $LLM_API_KEY\" "
+                f"https://api.fireworks.ai/inference/v1/models | jq '.data[].id'`. "
+                f"Поменяй `LLM_MODEL_NAME` в `.env`.\n")
+    if "429" in msg or "rate" in low and "limit" in low:
+        return (f"\n\n⚠ **Ошибка {s}: rate-limit Fireworks**\n\n"
+                f"Слишком много запросов. Подожди 1-2 минуты и повтори.\n")
+    if "timeout" in low or "timed out" in low:
+        return (f"\n\n⚠ **Ошибка {s}: timeout (LLM не ответил вовремя)**\n\n"
+                f"Попробуй повторить вопрос. Если повторяется — смени модель на более "
+                f"быструю в `LLM_MODEL_NAME`.\n")
+    if "connection" in low or "network" in low or "5" in msg[:3] and any(c in msg[:4] for c in "012345"):
+        return (f"\n\n⚠ **Ошибка {s}: проблема с подключением к Fireworks**\n\n"
+                f"Проверь сеть и попробуй ещё раз через минуту.\n\n"
+                f"Детали: `{msg[:200]}`\n")
+    # Fallback — обычная ошибка
+    return f"\n\n⚠ Ошибка {s}: `{msg[:300]}`\n"
+
+
 def _strip_reasoning(text: str) -> str:
     """Извлечь финальный ответ из reasoning-leaked output.
 
@@ -3132,7 +3185,7 @@ async def stream_deep_analysis(question: str,
             yield json.dumps({"type": "text", "chunk": cleaned})
     except Exception as e:
         log.warning("synthesizer failed: %s", e)
-        err = f"\n\n⚠ Ошибка синтеза: {str(e)[:200]}\n"
+        err = _format_llm_error(e, stage="синтез отчёта")
         full_report += err
         yield json.dumps({"type": "text", "chunk": err})
 
@@ -3645,6 +3698,10 @@ async def stream_deep_analysis(question: str,
                     valid_n = valid2
                 except Exception as e:
                     log.warning("2nd pass synthesizer failed: %s", e)
+                    # Стримим user-friendly ошибку (для billing/quota — критично).
+                    err = _format_llm_error(e, stage="дополнение отчёта (2-й pass)")
+                    full_report += err
+                    yield json.dumps({"type": "text", "chunk": err})
     except Exception as e:
         log.info("multi-pass review failed: %s", e)
 
