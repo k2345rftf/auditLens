@@ -907,6 +907,10 @@ async def stream_analysis(question: str, history: list[dict],
         max_retries=4,         # default 2; повышаем т.к. Fireworks 5xx бывают
         timeout=120.0,         # safety cap на одну операцию
     )
+    # Reasoning-модели (gpt-oss/glm/kimi/deepseek) тратят токены на CoT —
+    # без reasoning_effort=low content отвечает обрезано или пусто.
+    from .deep_research import _patch_client_reasoning_effort
+    client = _patch_client_reasoning_effort(client)
 
     messages = [
         {"role": "system", "content": SYSTEM},

@@ -17,7 +17,7 @@
 Все шаги детерминистичны и логируются.
 """
 from __future__ import annotations
-import asyncio, json, logging, re
+import asyncio, json, logging, os, re
 from typing import Any, AsyncIterator
 from openai import AsyncOpenAI
 
@@ -37,12 +37,19 @@ log = logging.getLogger(__name__)
 # оборачивать ФИНАЛЬНЫЙ ответ в <answer>...</answer>. Снаружи — её
 # рассуждения, мы их игнорируем.
 
+# <answer>-обёртка нужна ТОЛЬКО для старых reasoning-моделей, которые пишут
+# CoT прямо в content (например kimi-k2p5 без reasoning_effort). Если используем
+# reasoning_effort=low/medium/high — модель кладёт CoT в отдельное поле
+# reasoning_content, а content идёт сразу финальный → обёртка не нужна и даже
+# вредна (заставляет _StreamReasoningFilter буферизовать 8 KB до tag'а).
+_USE_ANSWER_WRAPPER = os.getenv("LLM_REASONING_EFFORT", "low").lower() in ("off", "none", "")
+
 ANSWER_TAG_INSTRUCTION = (
     "\n\nВАЖНО (формат вывода): сначала можешь свободно рассуждать, потом "
     "ОБЯЗАТЕЛЬНО заверни ИТОГОВЫЙ ответ в теги <answer>...</answer>. "
     "Внутри тегов — только финальный markdown/JSON/список БЕЗ метакомментариев. "
     "Снаружи — твои рассуждения (мы их не показываем пользователю)."
-)
+) if _USE_ANSWER_WRAPPER else ""
 
 
 _ANSWER_RE = re.compile(r"<answer>([\s\S]*?)(?:</answer>|$)", re.IGNORECASE)
@@ -102,6 +109,39 @@ def _format_llm_error(e: Exception, stage: str = "LLM-вызов") -> str:
     return f"\n\n⚠ Ошибка {s}: `{msg[:300]}`\n"
 
 
+def _patch_client_reasoning_effort(client):
+    """Глобально проставляет reasoning_effort=low ко ВСЕМ chat.completions.create
+    вызовам на этом клиенте.
+
+    Зачем: gpt-oss-120b / glm-5p1 / kimi-k2p6 / deepseek-v4-pro теперь все
+    reasoning-модели. Без явного reasoning_effort они тратят 50-90% max_tokens
+    на CoT в reasoning_content, до финального content не доходят — fact-extract
+    падает по timeout с пустыми результатами.
+
+    OpenAI SDK не поддерживает client-level extra_body, поэтому monkey-patch
+    обёртки `client.chat.completions.create`. Per-call override через kwargs
+    приоритетен (если кто-то явно передал reasoning_effort=high).
+
+    Тюнится через LLM_REASONING_EFFORT env: low (default) / medium / high / off.
+    «off» — патч не применяется (для не-reasoning моделей).
+    """
+    effort = os.getenv("LLM_REASONING_EFFORT", "low").lower()
+    if effort in ("off", "none", ""):
+        return client
+    orig = client.chat.completions.create
+
+    async def patched(*args, **kwargs):
+        if "reasoning_effort" not in kwargs:
+            extra = kwargs.get("extra_body") or {}
+            if "reasoning_effort" not in extra:
+                extra = {**extra, "reasoning_effort": effort}
+                kwargs["extra_body"] = extra
+        return await orig(*args, **kwargs)
+
+    client.chat.completions.create = patched
+    return client
+
+
 def _strip_reasoning(text: str) -> str:
     """Извлечь финальный ответ из reasoning-leaked output.
 
@@ -143,7 +183,11 @@ class _StreamReasoningFilter:
         self._buf = ""
         self._inside = False        # True после <answer>
         self._done = False          # True после </answer>
-        self._passthrough = False   # True если решили что тегов нет
+        # Если ANSWER_TAG_INSTRUCTION выключен (reasoning_effort=low) — модель
+        # отдаёт CoT в отдельное reasoning_content поле, а content идёт сразу
+        # финальный. Фильтр должен сразу passthrough'ить, иначе буферизует
+        # весь stream до timeout'а пользователя.
+        self._passthrough = not _USE_ANSWER_WRAPPER
         self._soft_buffer = soft_buffer_bytes
 
     def feed(self, chunk: str) -> list[str]:
@@ -2162,6 +2206,9 @@ async def stream_deep_analysis(question: str,
     # ошибка ломает весь deep-research (≥9 LLM-вызовов в цепочке).
     client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY,
                           max_retries=4, timeout=180.0)
+    # gpt-oss/glm/kimi/deepseek — reasoning-модели, тратят 50-90% токенов на
+    # CoT. Без reasoning_effort=low fact-extract отлетает по timeout с 0 facts.
+    client = _patch_client_reasoning_effort(client)
 
     # 1. mode переключение
     yield json.dumps({"type": "mode", "value": "deep"})
@@ -2331,10 +2378,13 @@ async def stream_deep_analysis(question: str,
                         if u and u not in seen:
                             deep_urls.append((u, slug)); seen.add(u)
                 if deep_urls:
-                    # Round-robin между банками: чтобы Sber/ВТБ/Тинькофф получили
-                    # равно URL'ов, а не тонули в порядке списка (раньше [:18] cap
-                    # дропал последний банк). Per-bank cap = 12, всего до 96.
-                    PER_BANK = 12
+                    # Round-robin между банками. PER_BANK cap снижен с 12 до 5 —
+                    # каждый URL это HTTP-fetch + parse + chunk + embed (~1-3s).
+                    # 12×4=48 fetch'ей блокируют pipeline на 30-60s, при этом
+                    # реально для fact-extract нужно 3-5 самых релевантных
+                    # документов на банк. Тюнится через PRE_INGEST_PER_BANK env.
+                    import os as _os
+                    PER_BANK = int(_os.getenv("PRE_INGEST_PER_BANK", "5"))
                     by_bank: dict[str | None, list] = {}
                     for u, hint in deep_urls:
                         by_bank.setdefault(hint, []).append((u, hint))
@@ -3009,16 +3059,24 @@ async def stream_deep_analysis(question: str,
                                 {"role": "system", "content": EXTRACT_SYS},
                                 {"role": "user",   "content": src_block[:30000]},
                             ],
-                            max_tokens=4500, temperature=0.0,
-                        ), timeout=70)
-                    facts = _strip_reasoning(
-                        (extract_resp.choices[0].message.content or "").strip())
+                            # 2500 max_tokens: один банк — это список 6-12 фактов
+                            # на 1-1.5 KB markdown. 2500 за глаза. Снижает latency
+                            # с ~30s до ~10-15s на банк (на gpt-oss-120b).
+                            max_tokens=int(os.getenv("FACT_EXTRACT_MAX_TOKENS","2500")),
+                            temperature=0.0,
+                        ), timeout=int(os.getenv("FACT_EXTRACT_TIMEOUT_S","35")))
+                    raw_content = (extract_resp.choices[0].message.content or "").strip()
+                    facts = _strip_reasoning(raw_content)
+                    log.warning("[fact-extract] %s raw=%s, stripped=%s, finish=%s",
+                                 slug, len(raw_content), len(facts),
+                                 extract_resp.choices[0].finish_reason)
                     if facts and len(facts) > 50:
                         log.warning("[fact-extract] %s: %s chars, %s lines",
                                      slug, len(facts), facts.count("\n"))
                         return slug, facts
                 except Exception as e:
-                    log.info("fact-extract LLM %s: %s", slug, e)
+                    log.warning("[fact-extract] LLM %s error: %s: %s",
+                                 slug, type(e).__name__, str(e)[:200])
                 return slug, None
 
             # PARALLEL: все 4-6 банков одновременно. Раньше sequential ~30s × 6 = 3min,
@@ -3146,7 +3204,11 @@ async def stream_deep_analysis(question: str,
     try:
         stream = await client.chat.completions.create(
             model=smart_model(), messages=synth_messages,  # synth = глубокое reasoning
-            max_tokens=14000, stream=True, temperature=0.15,  # +CoT-buffer для reasoning-моделей
+            # 8000 для gpt-oss-120b — отчёт 4-6 KB markdown за 20-30s.
+            # Юзер может поднять до 14000 если использует reasoning-модель
+            # с CoT-buffer'ом — через env SYNTH_MAX_TOKENS.
+            max_tokens=int(os.getenv("SYNTH_MAX_TOKENS", "8000")), stream=True,
+            temperature=0.15,
         )
         # Двойная буферизация:
         # 1) _StreamReasoningFilter — отрезает CoT снаружи <answer>...</answer>
@@ -3189,13 +3251,17 @@ async def stream_deep_analysis(question: str,
         full_report += err
         yield json.dumps({"type": "text", "chunk": err})
 
-    # 4.4 Critic-pass: если отчёт получился коротким (<3500 chars) ИЛИ
-    # использовано <50% источников — критик-LLM находит конкретные пропуски,
-    # и второй pass synthesizer'а добавляет недостающее (не переписывая старое).
+    # 4.4 Critic-pass: triggered только когда отчёт явно плох (короткий ИЛИ
+    # низкий recall). Порог recall снижен с 50% до 35% — добавление critic-pass
+    # стоит +30-50s, оправдано только когда synth реально упустил много source'ов.
+    # Тюнится через CRITIC_RECALL_THRESHOLD / CRITIC_MIN_REPORT_LEN env.
     try:
         used_cites = set(re.findall(r"\[(\d+)\]", full_report))
         recall = len(used_cites) / max(len(sources), 1)
-        if (len(full_report) < 3500 or recall < 0.5) and len(sources) >= 4:
+        import os as _os
+        _min_recall = float(_os.getenv("CRITIC_RECALL_THRESHOLD", "0.35"))
+        _min_len    = int(_os.getenv("CRITIC_MIN_REPORT_LEN",    "2500"))
+        if (len(full_report) < _min_len or recall < _min_recall) and len(sources) >= 4:
             log.warning("[critic-pass] triggered: len=%s recall=%.0f%% sources=%s",
                          len(full_report), recall*100, len(sources))
             CRITIC_SYS = (
@@ -3358,7 +3424,11 @@ async def stream_deep_analysis(question: str,
                          gap["query"][:50], type(e).__name__)
         return n_added
 
-    AGENT_LOOP_MAX = 2
+    # Agent-loop: каждая итерация +30-60s (gap-detect + web search + ingest +
+    # synth addendum). По умолчанию 0 — pipeline укладывается в 60-90s.
+    # Юзер может включить через AGENT_LOOP_MAX=2 для длинного quality-mode.
+    import os as _os
+    AGENT_LOOP_MAX = int(_os.getenv("AGENT_LOOP_MAX", "0"))
     for _iter in range(1, AGENT_LOOP_MAX + 1):
         try:
             yield json.dumps({"type": "phase",
@@ -3585,15 +3655,15 @@ async def stream_deep_analysis(question: str,
         except Exception as e:
             log.warning("[merge-pass] failed: %s", e)
 
-    # 4.5 Multi-pass review: считаем «не раскрыто» в драфте, и для каждого
-    # упомянутого entity где >2 «не раскрыто» — делаем 2-й pass с новыми
-    # web search и enrichment, потом дописываем addendum.
+    # 4.5 Multi-pass review: считаем «не раскрыто» в драфте. 2-й pass дорогой
+    # (+30-60s через web search + ingest + synth), поэтому по умолчанию OFF.
+    # Включается через MULTI_PASS_ENABLED=1 — тюнится для quality-mode.
     try:
         not_disclosed_count = full_report.count("Не раскрыто") + full_report.count("не раскрыто")
         unique_cites = len(set(re.findall(r"\[(\d+)\]", full_report)))
-        # 2-й pass только когда РЕАЛЬНО мало источников использовано (<4 unique).
-        # Иначе comprehensive context уже покрыл — расходуем токены зря.
-        should_second_pass = (unique_cites < 4 and not_disclosed_count >= 5
+        _mp_enabled = os.getenv("MULTI_PASS_ENABLED", "0").lower() in ("1","true","yes")
+        should_second_pass = (_mp_enabled and unique_cites < 4
+                              and not_disclosed_count >= 5
                               and bool(ents_for_synth))
         if should_second_pass:
             yield json.dumps({"type": "phase", "value": "second_pass"})

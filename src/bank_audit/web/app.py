@@ -14,6 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 from .. import db
 from ..config import Settings
 from ..ai.analyst import stream_analysis
+from .demo_stream import is_demo_mode_active, find_demo_response, stream_demo_response
 from ..notifier.email import EmailNotifier
 from ..notifier.alerts import alerts_background_loop, run_once as alerts_run_once
 from ..rag import cache as rag_cache
@@ -655,6 +656,23 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/ai/analyze")
 async def ai_analyze(req: ChatRequest):
+    # ── Demo hook: если DEMO_MODE=1 и вопрос совпадает с trigger_keywords ──
+    # одного из demo/responses/*.json — стримим заготовленный ответ за ~25-30s.
+    # Любые ДРУГИЕ вопросы идут в нормальный pipeline.
+    if is_demo_mode_active():
+        demo_resp = find_demo_response(req.question)
+        if demo_resp is not None:
+            return EventSourceResponse(
+                stream_demo_response(req.question, demo_resp),
+                media_type="text/event-stream",
+                ping=10,
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "X-Accel-Buffering": "no",
+                    "Content-Encoding": "identity",
+                },
+            )
+
     if not os.getenv("LLM_API_KEY"):
         raise HTTPException(503, "LLM_API_KEY не задан в .env")
     # Deep-research pipeline идёт 90-300s. Между phase-событиями могут быть

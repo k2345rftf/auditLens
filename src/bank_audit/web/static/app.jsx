@@ -317,8 +317,9 @@ function trustTier(score){
   return 3;
 }
 
-function renderMD(text, sources){
+function renderMD(text, sources, charts){
   if(!text) return null;
+  const chartsArr = Array.isArray(charts) ? charts : [];
   const srcByN={};
   if(Array.isArray(sources)){for(const s of sources){if(s&&s.n!=null)srcByN[s.n]=s;}}
   const escAttr=(v)=>(v==null?"":String(v).replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"));
@@ -366,6 +367,21 @@ function renderMD(text, sources){
     listBuf=[];
   };
   lines.forEach((ln,idx)=>{
+    // Inline-chart marker: [[CHART:N]] вставляет ChartCanvas прямо в поток
+    // markdown'а. Используется в demo и backend-generated отчётах когда
+    // нужно показать график между секциями, а не в конце.
+    const chm = /^\s*\[\[CHART:(\d+)\]\]\s*$/.exec(ln);
+    if(chm){
+      flushList(); flushTable();
+      const ci = parseInt(chm[1], 10);
+      const spec = chartsArr[ci];
+      if(spec){
+        out.push(<div key={"ch"+idx} className="dr-chart-inline">
+          <ChartCanvas spec={spec}/>
+        </div>);
+      }
+      return;
+    }
     if(ln.startsWith("|")){
       const cells=ln.split("|").map(c=>c.trim()).filter((_,i,a)=>i>0&&i<a.length-1);
       if(/^[-:\s|]+$/.test(ln.replace(/\|/g,"")))return;
@@ -967,6 +983,8 @@ function TrustMarks({score}){
 const SOURCE_KIND_LABELS = {
   bank_official: "Официальный сайт",
   regulator:     "Регулятор",
+  government:    "Госструктура",
+  legal_db:      "Юр. база",
   aggregator:    "Агрегатор",
   press:         "Пресса",
   analyst:       "Аналитика",
@@ -1947,11 +1965,20 @@ function AIPage(){
                                       sourcesCount={(m.sources||[]).length}/>}
                     {m.role==="ai"&&!m.text&&loading?
                       <div className="typing"><i/><i/><i/></div>:
-                      renderMD(m.text, m.sources)
+                      renderMD(m.text, m.sources, m.charts)
                     }
-                    {m.charts&&m.charts.length>0&&<div className="dr-charts-wrap">
-                      {m.charts.map((c,ci)=><ChartCanvas key={ci} spec={c}/>)}
-                    </div>}
+                    {/* Charts-wrap внизу: только те графики, что НЕ были встроены
+                        через [[CHART:N]] маркер. Если все встроены — пустой блок
+                        не рендерим. */}
+                    {(()=>{
+                      const used = new Set((m.text||"").matchAll(/\[\[CHART:(\d+)\]\]/g));
+                      const usedIdx = new Set();
+                      (m.text||"").replace(/\[\[CHART:(\d+)\]\]/g,(_,n)=>{usedIdx.add(parseInt(n,10));return _;});
+                      const rest = (m.charts||[]).filter((_,i)=>!usedIdx.has(i));
+                      return rest.length>0 && <div className="dr-charts-wrap">
+                        {rest.map((c,ci)=><ChartCanvas key={ci} spec={c}/>)}
+                      </div>;
+                    })()}
                     {m.verification&&<VerificationBanner verification={m.verification}/>}
                     {/* Дублирующая кнопка PDF — в конце документа, после всех
                         разделов и графиков. Нужна для длинных отчётов где
