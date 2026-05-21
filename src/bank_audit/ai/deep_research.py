@@ -1457,7 +1457,38 @@ SYNTHESIZER_BASE = """Ты — financial product analyst writer. Пишешь с
     не выкидывай.
   • Минимум 4 уникальных [N] на каждый банк в отчёте. Если в context source [N]=5
     про банк X — обязательно процитируй его хотя бы раз.
-  • Объём отчёта: 4000-7000 chars для 2-3 банков. Не короче."""
+  • Объём отчёта: 4000-7000 chars для 2-3 банков, 6000-12000 chars для 4+ банков.
+
+🎯 ОБЯЗАТЕЛЬНЫЕ ПОЛЯ для product-comparison (вопрос про сравнение продуктов):
+  Для КАЖДОГО банка обязательно попытайся раскрыть КАЖДОЕ из этих полей:
+    1. Ставка (минимум/максимум/диапазон)
+    2. Срок кредита/вклада
+    3. Минимальная и максимальная сумма
+    4. Первоначальный взнос (для кредитов)
+    5. Комиссия за выдачу/обслуживание
+    6. Требования к доходу/документам
+    7. Специальные программы (семейная/IT/военная/льготная)
+    8. Способы оформления (онлайн/офис/приложение)
+    9. Льготы и кэшбэк (если есть)
+   10. Срок рассмотрения заявки
+
+  Если в источнике поля НЕТ — пиши «⚠ Не раскрыто». НЕ выдумывай.
+  Если в источнике есть АЛЬТЕРНАТИВНОЕ значение (например ставка по разным
+  программам разная) — перечисли все: «6% (семейная)/16% (рыночная)».
+
+🎯 ПРОТИВ НЕИСЧЕРПЫВАЮЩЕГО ОТЧЁТА:
+  Аудитор сравнивает с тем что может найти за 2 секунды в Google. Твой отчёт
+  должен дать БОЛЬШЕ:
+    • Конкретные суммы / проценты / сроки — извлекай ВСЁ что есть в context
+    • Программы с госучастием — отдельным абзацем (семейная, ИТ, военная,
+      Дальневосточная, сельская, льготная)
+    • Сравнение по 5+ метрикам, а не «ставка от X»
+    • Расхождения между банками — отдельный bullet в Key Findings
+    • Прямые цитаты из тарифов когда уместно (типа «согласно тарифу [N]:
+      ставка 6% при ПВ от 20%»)
+  Если на банк меньше 4 фактов в PRE-EXTRACTED FACTS — раздел про этот
+  банк должен быть честным: «⚠ Не раскрыто: <конкретное поле>». НЕ заполняй
+  пустотой типа «банк предлагает ипотеку»."""
 
 
 # Adaptive outline planner — генерирует список секций под конкретный вопрос
@@ -2378,13 +2409,12 @@ async def stream_deep_analysis(question: str,
                         if u and u not in seen:
                             deep_urls.append((u, slug)); seen.add(u)
                 if deep_urls:
-                    # Round-robin между банками. PER_BANK cap снижен с 12 до 5 —
-                    # каждый URL это HTTP-fetch + parse + chunk + embed (~1-3s).
-                    # 12×4=48 fetch'ей блокируют pipeline на 30-60s, при этом
-                    # реально для fact-extract нужно 3-5 самых релевантных
-                    # документов на банк. Тюнится через PRE_INGEST_PER_BANK env.
-                    import os as _os
-                    PER_BANK = int(_os.getenv("PRE_INGEST_PER_BANK", "5"))
+                    # Round-robin между банками. PER_BANK=8 — компромисс:
+                    # 5 было слишком агрессивно (часть URL'ов 404/WAF → fact-extract
+                    # получал <3 chunks на банк → отчёт неисчерпывающий).
+                    # 8 даёт 4-6 реально успешных fetch'ей на банк, fact-extract
+                    # имеет с чем работать. Тюнится через PRE_INGEST_PER_BANK.
+                    PER_BANK = int(os.getenv("PRE_INGEST_PER_BANK", "8"))
                     by_bank: dict[str | None, list] = {}
                     for u, hint in deep_urls:
                         by_bank.setdefault(hint, []).append((u, hint))
@@ -2428,21 +2458,56 @@ async def stream_deep_analysis(question: str,
     # Триггер: «плюсы/минусы/отзыв/жалоб/нрави/неудобн».
     plan_bank_slugs = []
     seen = set()
+    # 1. ПЕРВЫМ источником — resolver.banks. Это ground truth: LLM-resolver
+    # уже распознал все упомянутые банки и нормализовал к slug'ам. Раньше
+    # эта инфо игнорировалась, и если planner-LLM забывал банк в шагах —
+    # он выпадал из всего pipeline (даже из fact-extract).
+    for sl in _resolved_bank_slugs:
+        if sl not in seen: plan_bank_slugs.append(sl); seen.add(sl)
+    # 2. Keyword detection из исходного вопроса (catch для незарегистрированных
+    # в resolver случаев — например когда resolver упал и пустой)
     for sl in detect_bank_slugs(question):
         if sl not in seen: plan_bank_slugs.append(sl); seen.add(sl)
     for st in plan:
-        # 1. Прямой entity-slug
+        # 3. Entity-slug из planner-step'ов
         e = (st.get("entity") or "").lower()
         if e in BANK_SLUG_TRIGGERS and e not in seen:
             plan_bank_slugs.append(e); seen.add(e)
-        # 2. Распознаём slugs из title шага (planner часто пишет
-        # "Сбербанк доверенности условия" с entity=null)
+        # 4. Slugs из title шага (planner часто пишет "Сбербанк ..." с entity=null)
         title_slugs = detect_bank_slugs(st.get("title") or "")
         for sl in title_slugs:
             if sl not in seen:
                 plan_bank_slugs.append(sl); seen.add(sl)
-    log.warning("[deep-dive] plan_bank_slugs=%s, q_topic=%s, q_bank_slugs=%s",
-                plan_bank_slugs, _q_topic, _q_bank_slugs)
+    log.warning("[deep-dive] plan_bank_slugs=%s, q_topic=%s, q_bank_slugs=%s, resolved=%s",
+                plan_bank_slugs, _q_topic, _q_bank_slugs, _resolved_bank_slugs)
+
+    # ── AUTO-INJECT шагов для банков которые resolver знает, но planner не
+    # включил в план. Главная защита от случая «пользователь спросил про 4
+    # банка, planner-LLM забыл 4-й». Раньше Т-банк пропадал бесшумно.
+    if _resolved_bank_slugs and _q_topic:
+        planned_entities = set()
+        for st in plan:
+            e = (st.get("entity") or "").lower()
+            if e: planned_entities.add(e)
+            for sl in detect_bank_slugs(st.get("title") or ""):
+                planned_entities.add(sl)
+        missing = [b for b in _resolved_bank_slugs if b not in planned_entities]
+        if missing:
+            next_n = max((s["n"] for s in plan if isinstance(s.get("n"), int)), default=0) + 1
+            for slug in missing:
+                # 3 шага на банк: условия / тарифы / привилегии — те же что в planner-промпте
+                plan.append({"n": next_n,   "title": f"Базовые условия по теме «{_q_topic}» — {slug}",
+                              "tool": "semantic_search", "entity": slug,
+                              "query": f"{_q_topic} {slug} описание условия требования"})
+                plan.append({"n": next_n+1, "title": f"Тарифы и лимиты — {slug}",
+                              "tool": "fetch_official", "entity": slug,
+                              "query": f"{_q_topic} {slug} filetype:pdf тарифы лимиты"})
+                plan.append({"n": next_n+2, "title": f"Привилегии и бонусы — {slug}",
+                              "tool": "semantic_search", "entity": slug,
+                              "query": f"{_q_topic} {slug} привилегии бонусы cashback"})
+                next_n += 3
+            log.warning("[planner] auto-injected %s steps for missing banks: %s",
+                         len(missing) * 3, missing)
 
     if question_wants_reviews(question):
         already_covered = {(s.get("entity") or "").lower()
@@ -3204,10 +3269,10 @@ async def stream_deep_analysis(question: str,
     try:
         stream = await client.chat.completions.create(
             model=smart_model(), messages=synth_messages,  # synth = глубокое reasoning
-            # 8000 для gpt-oss-120b — отчёт 4-6 KB markdown за 20-30s.
-            # Юзер может поднять до 14000 если использует reasoning-модель
-            # с CoT-buffer'ом — через env SYNTH_MAX_TOKENS.
-            max_tokens=int(os.getenv("SYNTH_MAX_TOKENS", "8000")), stream=True,
+            # 12000 для gpt-oss-120b с reasoning_effort=low — отчёт 8-12 KB
+            # markdown за 30-45s. Для 4+ банков 8000 было мало → отчёт получался
+            # неисчерпывающим. Тюнится через SYNTH_MAX_TOKENS.
+            max_tokens=int(os.getenv("SYNTH_MAX_TOKENS", "12000")), stream=True,
             temperature=0.15,
         )
         # Двойная буферизация:
