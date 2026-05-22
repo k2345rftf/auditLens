@@ -174,11 +174,15 @@ def _try_parse_numeric(val: str, unit: str) -> float | None:
 async def extract_triples(client: AsyncOpenAI, entity: Entity,
                            sources: list[GoldSource],
                            model: str | None = None,
-                           focus_attribute: str | None = None) -> list[Triple]:
+                           focus_attribute: str | None = None,
+                           core_schema_hint: str | None = None) -> list[Triple]:
     """Извлекает тройки из gold sources для одного entity.
 
-    focus_attribute — опциональная фокусировка (для gap-filling: «найди
-    только годовая_комиссия»). Если задан — промпт добавляет требование.
+    focus_attribute — опциональная фокусировка (gap-filling).
+    core_schema_hint — инструкция «обязательно найди эти 10-15 атрибутов».
+       Это ключевое улучшение качества: без core-schema LLM выдаёт периферию
+       (стоимость карта-стикера 700₽), а главные параметры (выпуск, кешбэк,
+       лимиты) пропускает.
     """
     if not sources:
         return []
@@ -191,6 +195,7 @@ async def extract_triples(client: AsyncOpenAI, entity: Entity,
         + (f"Аудитория: {entity.audience}\n" if entity.audience else "")
         + (f"\n# FOCUS\nИзвлекай ТОЛЬКО факты по атрибуту «{focus_attribute}»\n"
             if focus_attribute else "")
+        + (core_schema_hint or "")
         + f"\n# SOURCES\n{sources_block}\n\n"
         f"Извлеки тройки. Помни: НЕ выдумывай чисел, только из текста sources. "
         f"source_idx — НОМЕР источника (1-{len(sources)})."

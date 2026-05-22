@@ -31,6 +31,7 @@ from .triple_extractor import Triple, extract_triples
 from .schema_normalizer import normalize_schema, apply_normalization
 from .matrix_builder import Matrix, build_matrix
 from .matrix_renderer import render_report, extract_chart_specs
+from .core_schema import CoreAttr, discover_core_schema, build_extract_hint
 
 log = logging.getLogger(__name__)
 
@@ -220,6 +221,18 @@ async def stream_eav_research(question: str,
         yield evt({"type": "done"})
         return
 
+    # ── Stage 2.5: Discover CORE SCHEMA — 10-15 ключевых атрибутов продукта.
+    # Без этого extract выдаёт периферию (стоимость карта-стикера, дизайна),
+    # а главные параметры (выпуск/обслуживание/кешбэк/лимит) теряются.
+    primary_product = entities[0].product if entities else ""
+    primary_audience = entities[0].audience if entities else None
+    try:
+        core_schema = await discover_core_schema(client, primary_product, primary_audience)
+    except Exception as e:
+        log.warning("[orchestrator] core_schema discovery failed: %s", e)
+        core_schema = []
+    extract_hint = build_extract_hint(core_schema) if core_schema else ""
+
     # ── Stage 3: Triple extraction (parallel per entity) ─────────────────
     yield evt({"type": "phase", "value": "fact-extract"})
     yield evt({"type": "stage_status", "stage": "triple_extraction",
@@ -242,7 +255,8 @@ async def stream_eav_research(question: str,
         triples = []
         if srcs:
             try:
-                triples = await extract_triples(client, e, srcs)
+                triples = await extract_triples(client, e, srcs,
+                                                  core_schema_hint=extract_hint)
             except Exception as ex:
                 log.warning("extract_triples failed for %s: %s", e.bank_slug, ex)
 
@@ -270,7 +284,8 @@ async def stream_eav_research(question: str,
                         # Обновляем sources_per_entity для глобального index
                         sources_per_entity[e.bank_slug] = alt_srcs
                         srcs = alt_srcs
-                        triples = await extract_triples(client, alt_e, alt_srcs)
+                        triples = await extract_triples(client, alt_e, alt_srcs,
+                                                          core_schema_hint=extract_hint)
                         if triples:
                             # Подменяем bank_slug в триплах на оригинальный entity
                             for t in triples:
@@ -327,7 +342,9 @@ async def stream_eav_research(question: str,
                                                   sources_per_entity, sources_index)
 
     # ── Stage 5: Matrix build ────────────────────────────────────────────
-    matrix = build_matrix(entities, normalized_triples, sources_index)
+    core_attr_names = [a.name for a in core_schema]
+    matrix = build_matrix(entities, normalized_triples, sources_index,
+                           core_attrs=core_attr_names)
 
     # Outline для UI (структура отчёта детерминирована)
     yield evt({"type": "outline", "sections": [

@@ -73,16 +73,27 @@ def _render_summary(matrix: Matrix, question: str) -> str:
     return "\n".join(lines)
 
 
-def _render_comparison_table(matrix: Matrix, max_attrs: int = 12) -> str:
-    """Главная таблица: банки × top attributes по покрытию."""
+def _render_comparison_table(matrix: Matrix, max_attrs: int = 15) -> str:
+    """Главная таблица: банки × core attributes (если есть) или top-N.
+
+    Если есть core_attrs — показываем ВСЕ core (даже если у одного банка
+    заполнено). Это даёт стабильную структуру сравнения по 10-15 ключевым
+    параметрам. Периферия идёт в per-bank секции.
+    """
     if not matrix.entities or not matrix.attributes:
         return "_Нет данных для сравнения._"
-    # Берём top-N attribute'ов по числу заполненных клеток
-    attr_filled: dict[str, int] = {}
-    for attr in matrix.attributes:
-        attr_filled[attr] = sum(1 for e in matrix.entities
-                                   if matrix.cell(e.bank_slug, attr) is not None)
-    top_attrs = sorted(attr_filled.keys(), key=lambda a: -attr_filled[a])[:max_attrs]
+
+    core = getattr(matrix, "core_attrs", []) or []
+    if core:
+        # Главная таблица — только core атрибуты (всегда в одинаковом порядке)
+        top_attrs = [a for a in core if a in matrix.attributes][:max_attrs]
+    else:
+        # Fallback: top-N по числу заполненных клеток
+        attr_filled = {}
+        for attr in matrix.attributes:
+            attr_filled[attr] = sum(1 for e in matrix.entities
+                                       if matrix.cell(e.bank_slug, attr) is not None)
+        top_attrs = sorted(attr_filled.keys(), key=lambda a: -attr_filled[a])[:max_attrs]
 
     lines = ["## 📋 Сравнительная таблица", ""]
     header = "| Параметр | " + " | ".join(e.bank_name for e in matrix.entities) + " |"

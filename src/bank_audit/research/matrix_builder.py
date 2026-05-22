@@ -79,7 +79,8 @@ def _compute_variance(cells: dict[tuple[str, str], Triple | None],
 
 def build_matrix(entities: list[Entity],
                    triples: list[Triple],
-                   sources_index: list[dict] | None = None) -> Matrix:
+                   sources_index: list[dict] | None = None,
+                   core_attrs: list[str] | None = None) -> Matrix:
     """Собирает матрицу.
 
     sources_index — глобальный список источников с n-маркерами
@@ -90,10 +91,18 @@ def build_matrix(entities: list[Entity],
     attrs_seen: dict[str, int] = defaultdict(int)
     for t in triples:
         attrs_seen[t.attribute] += 1
-    # Сортируем атрибуты: 1) частые в нескольких банках 2) numeric — выше
+    # Сортируем атрибуты: 1) core_attrs всегда первыми (в порядке их priority)
+    # 2) затем частые в нескольких банках 3) затем алфавит.
+    core_set = set(core_attrs or [])
+    core_order = {a: i for i, a in enumerate(core_attrs or [])}
     attributes = sorted(
         attrs_seen.keys(),
-        key=lambda a: (-attrs_seen[a], a)
+        key=lambda a: (
+            a not in core_set,        # core первыми
+            core_order.get(a, 9999),  # порядок внутри core
+            -attrs_seen[a],            # частые выше
+            a                          # алфавит
+        )
     )
 
     # Заполняем cells. Если у одного банка несколько триплов одного attribute —
@@ -115,9 +124,13 @@ def build_matrix(entities: list[Entity],
         group.sort(key=lambda x: -_CONF_RANK.get(x.confidence, 1))
         cells[key] = group[0]
         if len(group) > 1:
-            # Если оставшиеся имеют РАЗНЫЕ value — это конфликт
+            # Конфликт ТОЛЬКО если разные значения ИЗ РАЗНЫХ источников.
+            # Два значения из одного source — это extract одного и того же
+            # поля в разных контекстах (например, тариф с условием/без условия),
+            # а не реальное противоречие.
             distinct = {g.value for g in group}
-            if len(distinct) > 1:
+            distinct_urls = {g.source_url for g in group}
+            if len(distinct) > 1 and len(distinct_urls) > 1:
                 conflicts[key] = group
 
     # Coverage
@@ -130,7 +143,7 @@ def build_matrix(entities: list[Entity],
 
     log.warning("[matrix_builder] %s entities × %s attrs = %s cells, %s filled (%.0f%%), %s conflicts",
                  len(banks), len(attributes), total, filled, coverage * 100, len(conflicts))
-    return Matrix(
+    matrix = Matrix(
         entities=entities,
         attributes=attributes,
         cells=cells,
@@ -139,3 +152,6 @@ def build_matrix(entities: list[Entity],
         variance=variance,
         sources=sources_index or [],
     )
+    # Сохраняем список core attributes для renderer'а (главная таблица показывает их)
+    setattr(matrix, "core_attrs", list(core_attrs or []))
+    return matrix
