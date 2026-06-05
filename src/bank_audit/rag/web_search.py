@@ -96,6 +96,9 @@ def search(
         backends.append(("searxng", _search_searxng))
     if _brave_key():
         backends.append(("brave", _search_brave))
+    # ddgs-пакет (мульти-движковая ротация: bing/brave/yandex/google) — основной
+    # рабочий backend когда SearXNG не поднят. Сам ротирует движки и токены.
+    backends.append(("ddgs", _search_ddgs))
     backends.append(("ddg", _search_ddg))
     backends.append(("yandex", _search_yandex))
 
@@ -126,6 +129,71 @@ def search(
     if results:
         rag_cache.put("web_search", results, cache_ttl_seconds, *cache_key[1:])
     return results[:max_results]
+
+
+# ── Backend 0: ddgs (мульти-движковый, основной без SearXNG) ──────────────
+_DDGS_BACKEND_CHAIN = "brave, yandex, duckduckgo, mojeek, google"
+
+
+def _search_ddgs(query: str, *, max_results: int = 8,
+                  site_filter: list[str] | None = None,
+                  region: str = "ru-ru") -> list[dict]:
+    """ddgs-пакет: ротация Bing/Brave/Yandex/DDG/Mojeek с обработкой токенов.
+
+    Главный рабочий backend когда SearXNG не запущен. Каждый движок пробуется
+    по очереди (backend="bing, brave, ..."), первый отдавший результат — берётся.
+    """
+    try:
+        from ddgs import DDGS
+    except Exception:
+        return []
+
+    full_query = query
+    if site_filter:
+        # ddgs понимает site: операторы
+        sites = " OR ".join(f"site:{d}" for d in site_filter[:8])
+        full_query = f"{query} ({sites})"
+
+    # Retry с backoff: ddgs-движки троттлятся при многих запросах подряд
+    # (батч из 16 тем × 13 запросов истощал поздние темы). Пустой ответ →
+    # пауза + повтор с ротацией порядка движков.
+    import time as _time
+    backend_orders = [_DDGS_BACKEND_CHAIN,
+                       "yandex, duckduckgo, brave, mojeek",
+                       "duckduckgo, mojeek, google, yandex"]
+    out: list[dict] = []
+    for attempt, backend in enumerate(backend_orders):
+        try:
+            with DDGS() as ddgs:
+                rows = ddgs.text(
+                    full_query,
+                    region=region or "ru-ru",
+                    safesearch="off",
+                    max_results=max(max_results, 8),
+                    backend=backend,
+                )
+                for r in (rows or []):
+                    url = r.get("href") or r.get("url") or ""
+                    if not url.startswith("http"):
+                        continue
+                    try:
+                        domain = (urlparse(url).hostname or "").replace("www.", "")
+                    except Exception:
+                        domain = ""
+                    out.append({
+                        "title":   (r.get("title") or "")[:200],
+                        "url":     url,
+                        "snippet": (r.get("body") or r.get("snippet") or "")[:400],
+                        "domain":  domain,
+                    })
+            if out:
+                break   # успех — выходим
+        except Exception as e:
+            log.info("ddgs %s (attempt %s): %s", query[:50], attempt + 1, type(e).__name__)
+        # пусто или ошибка — backoff перед сменой ротации движков
+        if attempt < len(backend_orders) - 1:
+            _time.sleep(1.5 * (attempt + 1))
+    return out[:max_results]
 
 
 # ── Backend 1: SearXNG ────────────────────────────────────────────────────

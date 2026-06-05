@@ -74,3 +74,7 @@ desktop.ini
 settings.json
 settings.local.json
 docker-compose.override.yml
+
+# Runtime artifacts (логи, сырьё, сгенерированные отчёты, captcha-стейт)
+workspace/
+*.bak

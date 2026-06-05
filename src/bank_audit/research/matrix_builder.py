@@ -15,8 +15,76 @@ from typing import Any
 
 from .entity_extractor import Entity
 from .triple_extractor import Triple
+from .fact import Fact
 
 log = logging.getLogger(__name__)
+
+
+def _norm_val(s: str) -> str:
+    """Нормализация значения для сравнения: lower, убираем до/от/~/около, пробелы."""
+    import re as _re
+    s = (s or "").lower().strip()
+    s = _re.sub(r"\b(до|от|примерно|около|~|более|менее|свыше)\b", "", s)
+    s = _re.sub(r"\s+", " ", s).strip(" .,:;")
+    return s
+
+
+def _is_material_conflict(group) -> bool:
+    """True только если значения РЕАЛЬНО противоречат друг другу.
+
+    Не конфликт (шум):
+      • одинаковое число с разными префиксами («до 12.5%» ↔ «12.5%»);
+      • числа в пределах ~2% (округление);
+      • одно значение — уточнённая версия другого (substring после нормализации);
+      • «да»/«есть»/«true» — синонимы наличия.
+    Конфликт: разные числа (4% ↔ 13.5%) или противоположные тексты.
+    """
+    # 1) Числовое сравнение, если у всех есть value_numeric
+    nums = [g.value_numeric for g in group if g.value_numeric is not None]
+    if len(nums) >= 2 and len(nums) == len([g for g in group if g.value is not None]):
+        lo, hi = min(nums), max(nums)
+        if lo == 0:
+            return hi != 0 and abs(hi) > 0.001
+        return (hi - lo) / abs(lo) > 0.02   # >2% разницы = реальный конфликт
+    # 2) Текстовое сравнение
+    _AFFIRM = {"да", "есть", "true", "yes", "+", "доступно", "возможно"}
+    norms = []
+    for g in group:
+        nv = _norm_val(g.value)
+        if nv in _AFFIRM:
+            nv = "__affirm__"
+        norms.append(nv)
+    uniq = [n for n in set(norms) if n]
+    if len(uniq) <= 1:
+        return False
+    # если одно значение — подстрока другого (уточнение), не конфликт
+    for a in uniq:
+        for b in uniq:
+            if a != b and a in b:
+                # есть пара «уточнение» — проверим, все ли так связаны
+                pass
+    # конфликт, если есть хотя бы две взаимно-НЕ-вложенные строки
+    for i, a in enumerate(uniq):
+        for b in uniq[i + 1:]:
+            if a not in b and b not in a:
+                return True
+    return False
+
+
+def _fact_to_triple(f: Fact) -> Triple:
+    """Конвертер Fact → Triple для совместимости с матрицей.
+
+    Сохраняем основные поля. Богатый контекст (conditions/qualifications/
+    exceptions/verbatim_quote/category/audit_priority) теряется в матрице
+    но остаётся доступным через исходный список фактов в narrative-секциях.
+    """
+    return Triple(
+        entity_bank_slug=f.entity_bank_slug,
+        attribute=f.attribute,
+        value=f.value, unit=f.unit, value_numeric=f.value_numeric,
+        source_idx=f.source_idx, source_url=f.source_url,
+        excerpt=f.verbatim_quote, confidence=f.confidence,
+    )
 
 
 @dataclass
@@ -78,14 +146,18 @@ def _compute_variance(cells: dict[tuple[str, str], Triple | None],
 
 
 def build_matrix(entities: list[Entity],
-                   triples: list[Triple],
+                   triples: list[Triple] | list[Fact],
                    sources_index: list[dict] | None = None,
                    core_attrs: list[str] | None = None) -> Matrix:
     """Собирает матрицу.
 
-    sources_index — глобальный список источников с n-маркерами
-    для цитирования в финальном отчёте.
+    triples         — Triple ИЛИ Fact (автоматически конвертирует Fact→Triple)
+    sources_index   — глобальный список источников с n-маркерами
     """
+    # Backward compat: если передали Fact[] — конвертируем в Triple[]
+    if triples and isinstance(triples[0], Fact):
+        triples = [_fact_to_triple(t) if isinstance(t, Fact) else t
+                    for t in triples]
     banks = [e.bank_slug for e in entities]
     # Собираем все уникальные attribute'ы (уже canonical после schema_normalizer)
     attrs_seen: dict[str, int] = defaultdict(int)
@@ -124,25 +196,31 @@ def build_matrix(entities: list[Entity],
         group.sort(key=lambda x: -_CONF_RANK.get(x.confidence, 1))
         cells[key] = group[0]
         if len(group) > 1:
-            # Конфликт ТОЛЬКО если разные значения ИЗ РАЗНЫХ источников.
-            # Два значения из одного source — это extract одного и того же
-            # поля в разных контекстах (например, тариф с условием/без условия),
-            # а не реальное противоречие.
-            distinct = {g.value for g in group}
+            # Конфликт ТОЛЬКО если значения МАТЕРИАЛЬНО различаются и из РАЗНЫХ
+            # источников. Отсекаем шум: «до 12.5%»↔«12.5%» (то же число),
+            # «ежемесячно»↔«ежемесячно в последний день» (уточнение, не противоречие).
             distinct_urls = {g.source_url for g in group}
-            if len(distinct) > 1 and len(distinct_urls) > 1:
+            if len(distinct_urls) > 1 and _is_material_conflict(group):
                 conflicts[key] = group
 
-    # Coverage
-    total = len(banks) * len(attributes)
-    filled = sum(1 for v in cells.values() if v is not None)
+    # Coverage — ЧЕСТНАЯ метрика по CORE-атрибутам.
+    # Периферийные атрибуты, найденные gap_filler'ом (карта-стикер, бонусы),
+    # не должны раздувать знаменатель и занижать coverage. Если core_attrs
+    # заданы — меряем «сколько ключевых параметров заполнено», иначе по всем.
+    cov_attrs = [a for a in (core_attrs or []) if a in attributes]
+    if not cov_attrs:
+        cov_attrs = list(attributes)
+    total = len(banks) * len(cov_attrs)
+    filled = sum(1 for b in banks for a in cov_attrs
+                  if cells.get((b, a)) is not None)
     coverage = (filled / total) if total > 0 else 0.0
 
     # Variance
     variance = _compute_variance(cells, attributes, banks)
 
-    log.warning("[matrix_builder] %s entities × %s attrs = %s cells, %s filled (%.0f%%), %s conflicts",
-                 len(banks), len(attributes), total, filled, coverage * 100, len(conflicts))
+    log.warning("[matrix_builder] %s entities × %s attrs (%s core) = %s core-cells, %s filled (%.0f%%), %s conflicts",
+                 len(banks), len(attributes), len(cov_attrs), total, filled,
+                 coverage * 100, len(conflicts))
     matrix = Matrix(
         entities=entities,
         attributes=attributes,

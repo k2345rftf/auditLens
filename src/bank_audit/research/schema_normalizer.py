@@ -14,6 +14,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from .triple_extractor import Triple, _parse_json_array
+from .fact import Fact
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ SYSTEM_PROMPT = """Ты — нормализатор схемы данных. П
 Возвращай ТОЛЬКО JSON массив. БЕЗ преамбулы."""
 
 
-async def normalize_schema(client: AsyncOpenAI, triples: list[Triple],
+async def normalize_schema(client: AsyncOpenAI, triples: list[Triple] | list[Fact],
                             model: str | None = None) -> dict[str, str]:
     """Возвращает mapping: исходный_attribute → canonical_attribute.
 
@@ -124,23 +125,38 @@ async def normalize_schema(client: AsyncOpenAI, triples: list[Triple],
     return mapping
 
 
-def apply_normalization(triples: list[Triple],
-                         mapping: dict[str, str]) -> list[Triple]:
-    """Применяет mapping к списку триплов — заменяет attribute на canonical."""
-    out = []
+def apply_normalization(triples: list[Triple] | list[Fact],
+                         mapping: dict[str, str]) -> list[Triple] | list[Fact]:
+    """Применяет mapping — заменяет attribute на canonical. Работает с Triple ИЛИ Fact."""
+    if not triples:
+        return list(triples)
+    is_fact = isinstance(triples[0], Fact)
+    out: list = []
     for t in triples:
         canon = mapping.get(t.attribute, t.attribute)
-        if canon != t.attribute:
-            # Создаём новый Triple с canonical имени (immutable copy)
-            t_new = Triple(
+        if canon == t.attribute:
+            out.append(t)
+            continue
+        if is_fact:
+            # Fact с canonical именем (mutable copy)
+            out.append(Fact(
                 entity_bank_slug=t.entity_bank_slug,
                 attribute=canon,
-                value=t.value, unit=t.unit,
-                value_numeric=t.value_numeric,
+                value=t.value, unit=t.unit, value_numeric=t.value_numeric,
+                conditions=list(t.conditions), qualifications=t.qualifications,
+                exceptions=list(t.exceptions), verbatim_quote=t.verbatim_quote,
+                page_context=t.page_context, category=t.category,
+                audit_priority=t.audit_priority,
+                related_attrs=list(t.related_attrs),
+                source_idx=t.source_idx, source_url=t.source_url,
+                confidence=t.confidence,
+            ))
+        else:
+            out.append(Triple(
+                entity_bank_slug=t.entity_bank_slug,
+                attribute=canon,
+                value=t.value, unit=t.unit, value_numeric=t.value_numeric,
                 source_idx=t.source_idx, source_url=t.source_url,
                 excerpt=t.excerpt, confidence=t.confidence,
-            )
-            out.append(t_new)
-        else:
-            out.append(t)
+            ))
     return out

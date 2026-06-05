@@ -361,3 +361,179 @@ async def find_gold_sources(client: AsyncOpenAI, entity: Entity,
                 len(top), entity.bank_slug,
                 [(s.url[-50:], round(s.gold_score, 2)) for s in top])
     return top
+
+
+# ════════════════════════════════════════════════════════════════════════
+# EXTENDED FINDER — Phase 2
+# ════════════════════════════════════════════════════════════════════════
+
+
+async def find_gold_sources_extended(client: AsyncOpenAI,
+                                       entity: Entity,
+                                       core_schema=None,
+                                       top_n: int = 10,
+                                       model: str | None = None) -> list[GoldSource]:
+    """РАСШИРЕННАЯ версия для Phase 2.
+
+    Отличия от find_gold_sources:
+      • Использует query_planner — 8-12 разных queries вместо одного set
+      • Поддерживает PDF (через pdf_extractor)
+      • Возвращает top_n=10 (vs 3) — больше материала для extract
+      • Dedup по content-fingerprint (region-similar pages)
+
+    Backward compat: если что-то падает — fallback на find_gold_sources.
+    """
+    from .query_planner import plan_queries
+    from .pdf_extractor import extract_pdf_text, is_pdf_url
+
+    model = model or os.getenv("LLM_MODEL_FAST") or \
+              os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+
+    # 1) Plan queries (LLM-driven multi-query)
+    try:
+        planned = await plan_queries(client, entity, core_schema or [],
+                                       model=model, n_queries=12)
+    except Exception as e:
+        log.warning("[extended_finder] query_planner failed: %s — fallback to base", e)
+        return await find_gold_sources(client, entity, top_n=min(top_n, 5),
+                                          model=model)
+
+    # 2) Pgvector first (быстрая лень-проверка БД)
+    topic_kws = list(set([entity.product.lower()] +
+                          [s.lower() for s in (entity.product_synonyms or []) if len(s) >= 4]))
+    main_word = entity.product.lower().split()[0] if entity.product else ""
+    if main_word and len(main_word) >= 5 and main_word not in topic_kws:
+        topic_kws.append(main_word[:6])
+
+    loop = asyncio.get_event_loop()
+    hyde_text = await _generate_hyde(client, entity, model)
+    try:
+        qvec = await loop.run_in_executor(None, embedder.embed_one, hyde_text)
+    except Exception as e:
+        log.warning("[extended_finder] HyDE embed failed: %s", e)
+        qvec = None
+
+    db_sources: list[GoldSource] = []
+    if qvec:
+        db_sources = await loop.run_in_executor(
+            None, _search_db_chunks, qvec, entity, 12, topic_kws)
+    on_topic_db = [s for s in db_sources if s.gold_score >= 0.3]
+    log.warning("[extended_finder] %s: %s on-topic from DB",
+                 entity.bank_slug, len(on_topic_db))
+
+    # 3) Web search — ВСЕГДА выполняется для Phase 2 (больше источников)
+    def _search_one(q_text: str) -> list[str]:
+        try:
+            results = web_search(q_text, max_results=5) or []
+            return [r.get("url", "") for r in results if r.get("url")]
+        except Exception as e:
+            log.info("web_search failed for %r: %s", q_text, e)
+            return []
+
+    # Параллельный поиск по всем queries
+    search_tasks = [loop.run_in_executor(None, _search_one, p.text)
+                     for p in planned]
+    search_lists = await asyncio.gather(*search_tasks, return_exceptions=False)
+
+    web_urls: list[str] = []
+    seen_urls: set[str] = set()
+    for q, urls in zip(planned, search_lists):
+        for u in urls:
+            if u and u not in seen_urls:
+                seen_urls.add(u)
+                web_urls.append(u)
+
+    log.warning("[extended_finder] %s: %s unique URLs from %s queries",
+                 entity.bank_slug, len(web_urls), len(planned))
+
+    # 4) Split URLs: PDF separately handled, остальные через ingest
+    pdf_urls = [u for u in web_urls if is_pdf_url(u)][:5]   # max 5 PDF
+    html_urls = [u for u in web_urls if not is_pdf_url(u)][:15]   # max 15 HTML
+
+    # 5) PDF extraction (parallel)
+    pdf_sources: list[GoldSource] = []
+    if pdf_urls:
+        sem = asyncio.Semaphore(3)
+
+        async def _one_pdf(url: str) -> GoldSource | None:
+            async with sem:
+                try:
+                    text = await extract_pdf_text(url)
+                except Exception as e:
+                    log.info("[extended_finder] PDF extract failed %s: %s", url, e)
+                    return None
+                if not text or len(text) < 300:
+                    return None
+                from urllib.parse import urlparse
+                host = urlparse(url).netloc.lower().removeprefix("www.")
+                # PDF официального банка — высокий trust
+                trust = 0.98 if entity.bank_domain and entity.bank_domain in host else 0.7
+                return GoldSource(
+                    url=url, title=url.split("/")[-1][:120],
+                    bank_slug=entity.bank_slug, domain=host,
+                    trust_score=trust, text=text,
+                    length=len(text), gold_score=trust * 0.9,
+                    document_id=None,
+                )
+        pdf_results = await asyncio.gather(*[_one_pdf(u) for u in pdf_urls],
+                                              return_exceptions=False)
+        pdf_sources = [s for s in pdf_results if s]
+        log.warning("[extended_finder] %s: %s PDF sources extracted",
+                     entity.bank_slug, len(pdf_sources))
+
+    # 6) Ingest HTML URLs — добавит их в БД, чтобы DB-поиск нашёл
+    if html_urls:
+        ingested = await loop.run_in_executor(
+            None, _ingest_urls_parallel, html_urls, entity.bank_slug)
+        log.warning("[extended_finder] %s: ingested %s/%s HTML URLs",
+                     entity.bank_slug, ingested, len(html_urls))
+        # Re-search БД с новым контентом
+        if qvec and ingested > 0:
+            db_sources = await loop.run_in_executor(
+                None, _search_db_chunks, qvec, entity, 16, topic_kws)
+
+    # 7) Combine: DB sources + PDF sources, dedup by URL и content-fingerprint
+    all_sources: list[GoldSource] = []
+    seen_urls = set()
+    seen_fingerprints = set()
+
+    for s in pdf_sources + sorted(db_sources, key=lambda x: -x.gold_score):
+        if s.url in seen_urls:
+            continue
+        # Content-fingerprint dedup (одинаковая страница в разных регионах)
+        fp = _content_fingerprint(s.text)
+        if fp and fp in seen_fingerprints:
+            log.info("[extended_finder] dedup by content: %s (similar to existing)",
+                      s.url[-50:])
+            continue
+        seen_urls.add(s.url)
+        if fp:
+            seen_fingerprints.add(fp)
+        all_sources.append(s)
+
+    top = all_sources[:top_n]
+    log.warning("[extended_finder] %s: %s sources final (%s PDF, %s HTML/DB)",
+                 entity.bank_slug, len(top),
+                 sum(1 for s in top if is_pdf_url(s.url)),
+                 sum(1 for s in top if not is_pdf_url(s.url)))
+    return top
+
+
+def _content_fingerprint(text: str, sample_len: int = 200) -> str:
+    """Simple content fingerprint: первые non-trivial слова → joined.
+
+    Используется для dedup региональных копий типа vtb.ru/.../ekaterinburg/,
+    .../nizhnij-novgorod/ — у них одинаковый body.
+    """
+    if not text or len(text) < 100:
+        return ""
+    # Берём первые 500 chars (это header+intro обычно), удаляем geo-маркеры
+    sample = text[:1000].lower()
+    # Удалим часто меняющиеся geo-слова между копиями страниц
+    import re as _re
+    sample = _re.sub(r"\b(в|из|для)\s+[А-ЯA-Z][а-яa-z\-]+", " ", sample)
+    # Извлечь токены 4+ символов
+    words = _re.findall(r"[а-яёa-z0-9]{4,}", sample)
+    # Берём первые 30 — этого достаточно для отличить разные страницы
+    sig = " ".join(words[:30])
+    return sig[:sample_len]

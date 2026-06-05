@@ -7,6 +7,17 @@ const CAT_LABELS = {
   card_credit:"Кредитные карты", card_debit:"Дебетовые карты",
   auto_loan:"Автокредиты", metals:"Драгметаллы", other:"Прочее",
 };
+// Темы жалоб (категории отзывов) — перевод ключей классификатора на русский
+const TOPIC_LABELS = {
+  fees:"Комиссии", rate_change:"Изменение ставки", app_bugs:"Сбои приложения",
+  support:"Поддержка", card_block:"Блокировка карты", credit_terms:"Условия кредита",
+  deposit_terms:"Условия вклада", atm:"Банкоматы", transfers:"Переводы",
+  interest_rate:"Процентная ставка", loan_approval:"Одобрение кредита",
+  branch_service:"Обслуживание в отделении", online_bank:"Онлайн-банк",
+  premium:"Премиум-обслуживание", bonus_program:"Бонусы и кешбэк",
+  documents:"Документы и справки", fraud:"Мошенничество", partner:"Партнёрские услуги",
+};
+const TL = t => TOPIC_LABELS[t] || t;
 const LOWER_IS_BETTER = new Set(["credit","mortgage","card_credit","auto_loan"]);
 const CATS_ORDER = ["deposit","credit","mortgage","card_credit","card_debit","auto_loan","metals"];
 const QUICK = [
@@ -613,7 +624,7 @@ function OverviewPage(){
           {!(topics?.length)?<div style={{color:"var(--ink-3)",fontSize:13,padding:"8px 0"}}>Нет данных по темам отзывов</div>:
           <HBars
             rows={topics.slice(0,6).map(t=>({
-              label:t.topic,value:t.n,
+              label:TL(t.topic),value:t.n,
               color:t.avg_rating<2.5?"var(--accent)":"var(--ink-3)",
             }))}
             fmt={v=>fmtNum(v)}
@@ -888,7 +899,7 @@ function ReviewsPage(){
       <div className="eyebrow" style={{marginBottom:6}}>§ Отзывы · {rvLoading?"…":filteredReviews.length} записей</div>
       <h1 className="t-h" style={{marginBottom:6}}>Голос клиента и темы жалоб</h1>
       <p className="t-cap" style={{maxWidth:"68ch"}}>
-        Sentiment размечен rule-based-словарями. Темы извлекаются по ключевым словам.
+        Тональность размечена по словарям. Темы извлекаются по ключевым словам.
       </p>
     </header>
 
@@ -910,14 +921,14 @@ function ReviewsPage(){
         {!topics.length?<div style={{color:"var(--ink-3)",fontSize:13}}>Нет данных</div>:
         <HBars
           rows={topics.slice(0,8).map(t=>({
-            label:t.topic,value:t.n,
+            label:TL(t.topic),value:t.n,
             color:t.avg_rating<2.5?"var(--accent)":"var(--ink-3)",
           }))}
           fmt={v=>fmtNum(v)}
         />}
       </div>
       <div className="surface" style={{padding:22}}>
-        <div className="eyebrow" style={{marginBottom:14}}>Sentiment по банкам</div>
+        <div className="eyebrow" style={{marginBottom:14}}>Тональность по банкам</div>
         {!sentiment.length?<div style={{color:"var(--ink-3)",fontSize:13}}>Нет данных</div>:
         <table style={{margin:"-4px"}}>
           <thead><tr><th>Банк</th><th className="right">Негатив %</th><th className="right">Всего</th></tr></thead>

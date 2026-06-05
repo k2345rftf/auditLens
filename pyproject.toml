@@ -24,6 +24,7 @@ dependencies = [
   "selectolax>=0.3.21",
   "playwright>=1.45",
   "tenacity>=8.3",
+  "ddgs>=9.0",          # мульти-движковый web-search (fallback когда SearXNG down)
 
   # ── Database / ORM ────────────────────────────────────────────────────
   "sqlalchemy>=2.0",
