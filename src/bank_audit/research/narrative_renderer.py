@@ -333,6 +333,7 @@ async def render_narrative_report(
     has_regulatory: bool = False,
     topic_profile = None,
     brief = None,
+    preview_emitted: bool = False,
 ) -> tuple[list[Section], str]:
     """Главная функция: возвращает (sections_used, final_markdown).
 
@@ -425,21 +426,25 @@ async def render_narrative_report(
     except Exception as e:
         log.warning("[narrative_renderer] critic/repair failed: %s", e)
 
-    # 3) Сборка финального markdown
-    parts = [f"# Аудит-отчёт: {question}", ""]
-
-    # Header-summary (детерминированный)
-    n_banks = len(entities)
-    n_attrs = len(matrix.attributes)
-    cov_pct = round(matrix.coverage * 100)
-    n_facts = len(facts)
-    n_high = sum(1 for f in facts if f.audit_priority == "high")
-    parts.append(
-        f"_Сравнение **{n_banks} банков** по **{n_attrs}** параметрам — "
-        f"всего **{n_facts}** фактов извлечено ({n_high} приоритет high), "
-        f"покрытие core-схемы **{cov_pct}%**._"
-    )
-    parts.append("")
+    # 3) Сборка финального markdown.
+    # Если preview уже отдан оркестратором (ранняя таблица) — НЕ дублируем
+    # заголовок/summary/сравнительную таблицу в финальном теле.
+    if preview_emitted:
+        parts = []
+    else:
+        parts = [f"# Аудит-отчёт: {question}", ""]
+        # Header-summary (детерминированный)
+        n_banks = len(entities)
+        n_attrs = len(matrix.attributes)
+        cov_pct = round(matrix.coverage * 100)
+        n_facts = len(facts)
+        n_high = sum(1 for f in facts if f.audit_priority == "high")
+        parts.append(
+            f"_Сравнение **{n_banks} банков** по **{n_attrs}** параметрам — "
+            f"всего **{n_facts}** фактов извлечено ({n_high} приоритет high), "
+            f"покрытие core-схемы **{cov_pct}%**._"
+        )
+        parts.append("")
 
     # ВЕРИФИКАЦИЯ НПА (#7): помечаем номера ФЗ/постановлений, которых нет в
     # источниках/фактах (регуляторные секции склонны выдумывать «ФЗ-102 о банках»).
@@ -450,6 +455,10 @@ async def render_narrative_report(
     # Per-section markdown
     used_sections = []
     for sec, md in results:
+        # Сравнительная таблица уже отдана в раннем preview — не дублируем
+        if preview_emitted and sec.kind == "comparison_table":
+            used_sections.append(sec)
+            continue
         if md and md.strip():
             md, unv = annotate_unverified_npa(md, npa_haystack)
             if unv:

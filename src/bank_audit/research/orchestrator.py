@@ -32,7 +32,8 @@ from .fact import Fact
 from .fact_extractor import extract_facts
 from .schema_normalizer import normalize_schema, apply_normalization
 from .matrix_builder import Matrix, build_matrix
-from .narrative_renderer import render_narrative_report, extract_chart_specs
+from .narrative_renderer import (render_narrative_report, extract_chart_specs,
+                                   _comparison_table_md)
 from .research_brief import synthesize_brief
 from .core_schema import CoreAttr, discover_core_schema, build_extract_hint
 from .narrative_generators.regulatory_box import REGULATORY_DOMAINS
@@ -555,6 +556,35 @@ async def stream_eav_research(question: str,
                 "dropped": 0,
                 "samples": []})
 
+    # ── Stage 5.7: РАННЯЯ ОТДАЧА таблицы (perceived latency) ─────────────
+    # Самый ценный артефакт — сравнительная таблица + графики — готов сразу после
+    # матрицы (детерминированно, без LLM). Отдаём его ДО brief/outline/секций/
+    # критика (~60-70с раньше) — пользователь видит «мясо», нарратив идёт следом.
+    preview_emitted = False
+    early_charts = []
+    try:
+        n_banks = len(entities)
+        n_attrs = len(matrix.attributes)
+        cov_pct = round(matrix.coverage * 100)
+        n_facts = len(normalized_facts)
+        n_high = sum(1 for f in normalized_facts if f.audit_priority == "high")
+        yield evt({"type": "text", "chunk": f"# Аудит-отчёт: {question}\n\n"})
+        yield evt({"type": "text", "chunk": (
+            f"_Сравнение **{n_banks} банков** по **{n_attrs}** параметрам — "
+            f"всего **{n_facts}** фактов извлечено ({n_high} приоритет high), "
+            f"покрытие core-схемы **{cov_pct}%**._\n\n")})
+        yield evt({"type": "text", "chunk": _comparison_table_md(matrix) + "\n\n"})
+        early_charts = extract_chart_specs(matrix)
+        for ch in early_charts:
+            yield evt({"type": "chart", "spec": ch})
+            await asyncio.sleep(0.05)
+        preview_emitted = True
+        yield evt({"type": "stage_status", "stage": "preview_ready",
+                    "label": "Сравнительная таблица готова",
+                    "detail": "Выводы и нарратив формируются…", "estimate_s": 0})
+    except Exception as e:
+        log.warning("[orchestrator] ранняя отдача таблицы не удалась: %s", e)
+
     # ── Stage 6: Narrative outline planning + section generation ─────────
     yield evt({"type": "phase", "value": "synthesizing"})
     yield evt({"type": "stage_status", "stage": "outline_planning",
@@ -612,6 +642,7 @@ async def stream_eav_research(question: str,
             has_regulatory=has_reg,
             topic_profile=topic_profile,
             brief=brief,
+            preview_emitted=preview_emitted,
         )
     except Exception as e:
         log.exception("[orchestrator] narrative_render failed: %s", e)
@@ -634,11 +665,15 @@ async def stream_eav_research(question: str,
         await asyncio.sleep(0.03)
 
     # ── Stage 7: Charts from matrix ──────────────────────────────────────
-    yield evt({"type": "phase", "value": "charting"})
-    charts = extract_chart_specs(matrix)
-    for ch in charts:
-        yield evt({"type": "chart", "spec": ch})
-        await asyncio.sleep(0.1)
+    # Если графики уже отданы в раннем preview — не дублируем.
+    if preview_emitted:
+        charts = early_charts
+    else:
+        yield evt({"type": "phase", "value": "charting"})
+        charts = extract_chart_specs(matrix)
+        for ch in charts:
+            yield evt({"type": "chart", "spec": ch})
+            await asyncio.sleep(0.1)
 
     # ── Done ────────────────────────────────────────────────────────────
     elapsed = time.time() - started
