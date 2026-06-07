@@ -441,13 +441,25 @@ async def render_narrative_report(
     )
     parts.append("")
 
+    # ВЕРИФИКАЦИЯ НПА (#7): помечаем номера ФЗ/постановлений, которых нет в
+    # источниках/фактах (регуляторные секции склонны выдумывать «ФЗ-102 о банках»).
+    from .narrative_generators.base import build_npa_haystack, annotate_unverified_npa
+    npa_haystack = build_npa_haystack(facts, sources_index, question)
+    all_unverified: list[str] = []
+
     # Per-section markdown
     used_sections = []
     for sec, md in results:
         if md and md.strip():
+            md, unv = annotate_unverified_npa(md, npa_haystack)
+            if unv:
+                all_unverified.extend(unv)
             parts.append(md)
             parts.append("")
             used_sections.append(sec)
+    if all_unverified:
+        log.warning("[narrative_renderer] НПА не подтверждены источником: %s",
+                     sorted(set(all_unverified)))
 
     # Расхождения в источниках — всегда при наличии конфликтов (audit-критично),
     # если LLM-секция conflicts_explained не была выбрана outline-планировщиком.

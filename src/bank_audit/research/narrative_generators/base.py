@@ -326,6 +326,70 @@ def _is_derived_number(n: float, fact_nums: set[float], tol: float = 0.02) -> bo
     return False
 
 
+# ════════════════════════════════════════════════════════════════════
+# ВЕРИФИКАЦИЯ НПА (номеров законов/постановлений)
+# ════════════════════════════════════════════════════════════════════
+# Регуляторные секции склонны выдумывать номера ФЗ («ФЗ-102 о банках» —
+# на деле ФЗ-102 это «Об ипотеке»). Помечаем номера, которых НЕТ в источниках.
+
+_NPA_NUM_RE = re.compile(
+    r"(№\s*)?(\d{1,4})\s*[-–]\s*ФЗ"                    # 102-ФЗ
+    r"|ФЗ\s*[-–]?\s*№?\s*(\d{1,4})"                     # ФЗ-102 / ФЗ № 102
+    r"|(?:постановлени\w*|пост\.)\s+(?:правительства\s+)?(?:рф\s+)?"
+    r"(?:№|n)\s*(\d{1,4})",                              # постановление № 1234
+    re.IGNORECASE,
+)
+
+
+def build_npa_haystack(facts: list[Fact], sources_index: list[dict],
+                        question: str = "") -> str:
+    """Текст-основание для проверки НПА: цитаты фактов + выдержки/заголовки
+    источников + вопрос. Номер закона считаем подтверждённым, если он тут есть."""
+    parts = [question or ""]
+    for f in facts or []:
+        parts.append(f.verbatim_quote or "")
+        parts.append(f.value or "")
+        parts.append(" ".join(f.conditions or []))
+    for s in sources_index or []:
+        parts.append(s.get("title") or "")
+        parts.append(" ".join(s.get("excerpts") or []))
+    return re.sub(r"\s+", " ", " ".join(parts)).lower()
+
+
+def _npa_grounded(num: str, haystack: str) -> bool:
+    """True, если номер закона/постановления реально встречается в источниках."""
+    pat = re.compile(
+        rf"\b{num}\s*[-–]?\s*фз\b"            # 102-фз
+        rf"|фз\s*[-–]?\s*№?\s*{num}\b"        # фз-102
+        rf"|закон\D{{0,25}}{num}\b"            # закон ... 102
+        rf"|постановлени\w*\D{{0,35}}{num}\b", # постановление ... 1234
+        re.IGNORECASE,
+    )
+    return bool(pat.search(haystack))
+
+
+def annotate_unverified_npa(text: str, haystack: str) -> tuple[str, list[str]]:
+    """Помечает номера ФЗ/постановлений, не подтверждённые источниками, маркером
+    «⚠(номер требует сверки)». Возвращает (annotated_text, список_неподтверждённых).
+    Статьи (ст. N) НЕ трогаем — фокус на самых вредных ошибках (номер ФЗ/ПП)."""
+    if not text:
+        return text, []
+    unverified: list[str] = []
+    marked: set[str] = set()
+
+    def _repl(m: re.Match) -> str:
+        num = m.group(2) or m.group(3) or m.group(4)
+        if not num or _npa_grounded(num, haystack):
+            return m.group(0)
+        if num not in marked:
+            marked.add(num)
+            unverified.append(m.group(0).strip())
+            return m.group(0) + " ⚠(номер требует сверки с источником)"
+        return m.group(0) + " ⚠"
+
+    return _NPA_NUM_RE.sub(_repl, text), unverified
+
+
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[А-ЯA-Z])")
 _CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
