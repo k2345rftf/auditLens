@@ -75,6 +75,47 @@ def _has_subsidy_topic(q: str) -> bool:
     return any(k in ql for k in _SUBSIDY_KW)
 
 
+# Детерминированные backstop'ы по корню продукта (item 50): даже если LLM
+# поскупился/упал/ошибся, явные ключевые слова направляют topic_kind, нужные
+# домены и применимые секции. Минимум хардкода — только корни-маркеры.
+_PRODUCT_ROOTS = {
+    "mortgage":   (("ипотек", "ипотеч"), True),
+    "deposit":    (("вклад", "депозит", "накопительн счет", "накопительн счёт",
+                    "сберегательн"), False),
+    "insurance":  (("страхов", "осаго", "каско", "исж", "нсж", "страховк"), True),
+    "investment": (("брокер", "иис", "облигац", "ценн бумаг", "пиф", "инвестицион"), True),
+    "loan":       (("автокредит", "потребительск кредит", "потребкредит",
+                    "кредит наличными", "образовательн кредит"), False),
+}
+
+
+def _apply_product_backstops(profile: "TopicProfile", question: str) -> "TopicProfile":
+    """Если LLM вернул общий retail, но в вопросе явный корень продукта —
+    уточняем topic_kind и подключаем нужные секции/регуляторику детерминированно."""
+    ql = (question or "").lower()
+    for kind, (roots, needs_reg) in _PRODUCT_ROOTS.items():
+        if any(r in ql for r in roots):
+            if profile.topic_kind in ("retail", "mixed", ""):
+                # LLM не распознал явный продукт → классификация была неуверенной
+                if profile.topic_kind == "retail":
+                    profile.topic_uncertain = True
+                profile.topic_kind = kind
+            if needs_reg:
+                profile.needs_regulatory = True
+                for d in ("cbr.ru", "consultant.ru", "pravo.gov.ru"):
+                    if d not in profile.regulatory_domains:
+                        profile.regulatory_domains.append(d)
+                if "regulatory_box" not in profile.applicable_section_kinds:
+                    profile.applicable_section_kinds.append("regulatory_box")
+            # ценовая секция почти всегда уместна для продукта с тарифами
+            if "pricing_breakdown" not in profile.applicable_section_kinds:
+                profile.applicable_section_kinds.append("pricing_breakdown")
+            log.warning("[topic_classifier] product-backstop → kind=%s (reg=%s)",
+                         kind, needs_reg)
+            break
+    return profile
+
+
 def _apply_subsidy_override(profile: "TopicProfile", question: str) -> "TopicProfile":
     """Детерминированно включает regulatory+госпрограммы для тем субсидий/льгот.
     Применяется на ВСЕХ путях (и при успехе LLM, и в fallback) — иначе при пустом
@@ -118,6 +159,10 @@ class TopicProfile:
 
     # Текстовое описание темы для других модулей
     summary: str = ""
+
+    # Классификация ненадёжна (LLM упал/вернул retail вопреки явным ключевым
+    # словам) — потребитель может показать пометку «тема определена неуверенно».
+    topic_uncertain: bool = False
 
 
 SYSTEM_PROMPT = """Ты — классификатор тем для банковского аудита. На основе
@@ -280,8 +325,9 @@ async def classify_topic(client: AsyncOpenAI, question: str,
         summary=summary or f"Тема: {topic_kind}",
     )
 
-    # Детерминированный override субсидий/льгот — на всех путях (см. helper).
+    # Детерминированные backstop'ы — на всех путях (см. helpers).
     profile = _apply_subsidy_override(profile, question)
+    profile = _apply_product_backstops(profile, question)
 
     log.warning("[topic_classifier] kind=%s reg=%s gov=%s domains=%s hints=%d sections=%d",
                  profile.topic_kind, profile.needs_regulatory,
@@ -304,9 +350,11 @@ def _default_profile(question: str) -> TopicProfile:
                                     "per_entity_breakdown", "pricing_breakdown",
                                     "risks_recommendations"],
         summary=f"Fallback: {question[:100]}",
+        topic_uncertain=True,   # это аварийный профиль — тема не определена LLM
     )
-    # Даже в fallback: тема субсидий/льгот → грузим НПА и госпрограммы.
-    return _apply_subsidy_override(profile, question)
+    # Даже в fallback: субсидии и корни продукта подключают НПА/госпрограммы/секции.
+    profile = _apply_subsidy_override(profile, question)
+    return _apply_product_backstops(profile, question)
 
 
 def _parse_json_object(raw: str) -> dict | None:

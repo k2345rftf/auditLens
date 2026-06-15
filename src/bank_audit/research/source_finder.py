@@ -119,10 +119,23 @@ def _enrich_source(src: GoldSource, topic_keywords: list[str] | None = None) -> 
     if topic_keywords:
         low = txt.lower()
         hits = sum(low.count(kw.lower()) for kw in topic_keywords if kw and len(kw) >= 4)
+        # Высокодоверенные источники (офиц. сайт банка / PDF-тариф) штрафуем мягче:
+        # ключевое слово может быть сформулировано иначе, но это всё равно
+        # первоисточник банка — зануление выкидывало валидные тарифные страницы.
+        # Мягкий штраф ТОЛЬКО для собственных страниц банка (офиц.домен/PDF/
+        # product-URL) — там ключевое слово может быть сформулировано иначе.
+        # Для агрегаторов/прессы штраф ОСТАЁТСЯ жёстким: иначе по запросу
+        # «автоперевод» в выборку лезут страницы «вклады» с banki.ru/sravni.ru
+        # (off-topic-загрязнение). Это и был регресс — возвращаем строгость.
+        dom = (src.domain or "").lower()
+        is_bank_own = (getattr(src, "trust_score", 0) or 0) >= 0.9 or \
+                      (src.url or "").lower().split("?")[0].endswith(".pdf") or \
+                      (getattr(src, "is_product_url", False) and dom not in
+                       ("banki.ru", "sravni.ru", "bankiros.ru", "brobank.ru", "vc.ru"))
         if hits == 0:
-            src.gold_score *= 0.1   # off-topic — почти исключаем
+            src.gold_score *= 0.45 if is_bank_own else 0.08   # агрегатор off-topic → почти вон
         elif hits == 1:
-            src.gold_score *= 0.5   # слабая релевантность
+            src.gold_score *= 0.8 if is_bank_own else 0.4
         # ≥2 хитов — оставляем gold_score как есть
     return src
 
@@ -288,6 +301,71 @@ def _ingest_urls_parallel(urls: list[str], slug_hint: str,
     return sum(1 for r in results if r and getattr(r, "document_id", None))
 
 
+def _domain_of(url: str) -> str:
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(url).hostname or "").lower().removeprefix("www.")
+    except Exception:
+        return ""
+
+
+async def _triage_candidates(client: AsyncOpenAI, entity: Entity,
+                              candidates: list[dict], model: str,
+                              keep_max: int = 10) -> list[dict]:
+    """LLM-триаж кандидатов ДО скачивания (этап 5 архитектуры).
+
+    Вместо того чтобы скачать/проиндексировать ВСЁ и потом резать keyword-
+    эвристиками (gold_score, off-topic штрафы), LLM смотрит на title+snippet+
+    домен и оставляет только релевантные ПРОДУКТУ страницы. Это и есть
+    «фильтрация LLM, а не кодом» — режет 60-70% лишних fetch/embed и убирает
+    мусор («вклады» по запросу про «автоперевод») в зародыше.
+
+    Fallback: при сбое LLM/мало кандидатов — возвращаем всё (как было)."""
+    if len(candidates) <= 3:
+        return candidates
+    listing = "\n".join(
+        f"[{i}] {c.get('domain','')} | {(c.get('title') or '')[:90]} | "
+        f"{(c.get('snippet') or '')[:160]}"
+        for i, c in enumerate(candidates)
+    )
+    syns = ", ".join((entity.product_synonyms or [])[:4])
+    sys_p = ("Ты — отборщик источников для аудита. По заголовку, сниппету и домену "
+             "решаешь, относится ли страница к ЗАПРОШЕННОМУ продукту. Отсевай: "
+             "страницы про ДРУГИЕ продукты банка (вклады/кредиты/карты, если спросили "
+             "не их), общие статьи-советы, маркетинг без конкретики, нерелевантные "
+             "домены. При сомнении — НЕ включай. Верни строго JSON: "
+             '{"keep":[индексы релевантных]}. БЕЗ преамбулы.')
+    user_p = (f"# Продукт: {entity.product}" + (f" (синонимы: {syns})" if syns else "") +
+              f"\n# Банк: {entity.bank_name}\n\n# Кандидаты\n{listing}\n\n"
+              f"Верни индексы страниц именно про «{entity.product}».")
+    try:
+        from ..ai.llm_utils import _loose_json_loads
+        resp = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": sys_p},
+                          {"role": "user", "content": user_p}],
+                max_tokens=500, temperature=0.0),
+            timeout=40)
+        data = _loose_json_loads(resp.choices[0].message.content or "")
+        keep = data.get("keep") if isinstance(data, dict) else None
+        if not isinstance(keep, list) or not keep:
+            log.warning("[triage] %s: пустой keep — оставляем всех %s",
+                         entity.bank_slug, len(candidates))
+            return candidates
+        idxs = [int(i) for i in keep if isinstance(i, (int, float, str)) and str(i).isdigit()]
+        kept = [candidates[i] for i in idxs if 0 <= i < len(candidates)][:keep_max]
+        if not kept:
+            return candidates
+        log.warning("[triage] %s: LLM оставил %s/%s кандидатов (отсеяно %s off-topic)",
+                     entity.bank_slug, len(kept), len(candidates),
+                     len(candidates) - len(kept))
+        return kept
+    except Exception as e:
+        log.warning("[triage] %s failed: %s — оставляем всех", entity.bank_slug, e)
+        return candidates
+
+
 # ── Главная функция ────────────────────────────────────────────────────
 async def find_gold_sources(client: AsyncOpenAI, entity: Entity,
                               top_n: int = 3,
@@ -422,30 +500,45 @@ async def find_gold_sources_extended(client: AsyncOpenAI,
     log.warning("[extended_finder] %s: %s on-topic from DB",
                  entity.bank_slug, len(on_topic_db))
 
-    # 3) Web search — ВСЕГДА выполняется для Phase 2 (больше источников)
-    def _search_one(q_text: str) -> list[str]:
+    # 3) Web search — СОХРАНЯЕМ title+snippet (раньше выбрасывались), они нужны
+    #    для LLM-триажа ДО скачивания.
+    def _search_one(q_text: str) -> list[dict]:
         try:
             results = web_search(q_text, max_results=5) or []
-            return [r.get("url", "") for r in results if r.get("url")]
+            out = []
+            for r in results:
+                u = r.get("url")
+                if not u:
+                    continue
+                out.append({"url": u, "title": r.get("title") or "",
+                            "snippet": r.get("snippet") or "",
+                            "domain": r.get("domain") or _domain_of(u)})
+            return out
         except Exception as e:
             log.info("web_search failed for %r: %s", q_text, e)
             return []
 
-    # Параллельный поиск по всем queries
     search_tasks = [loop.run_in_executor(None, _search_one, p.text)
                      for p in planned]
     search_lists = await asyncio.gather(*search_tasks, return_exceptions=False)
 
-    web_urls: list[str] = []
+    candidates: list[dict] = []
     seen_urls: set[str] = set()
-    for q, urls in zip(planned, search_lists):
-        for u in urls:
-            if u and u not in seen_urls:
-                seen_urls.add(u)
-                web_urls.append(u)
+    for urls in search_lists:
+        for c in urls:
+            if c["url"] and c["url"] not in seen_urls:
+                seen_urls.add(c["url"])
+                candidates.append(c)
 
     log.warning("[extended_finder] %s: %s unique URLs from %s queries",
-                 entity.bank_slug, len(web_urls), len(planned))
+                 entity.bank_slug, len(candidates), len(planned))
+
+    # 3.5) LLM-ТРИАЖ кандидатов ДО скачивания (этап 5): отсев off-topic по
+    # сниппетам рассуждением, а не keyword-эвристиками постфактум.
+    SNIPPET_TRIAGE = os.getenv("SNIPPET_TRIAGE", "1").lower() in ("1", "true", "yes")
+    if SNIPPET_TRIAGE and candidates:
+        candidates = await _triage_candidates(client, entity, candidates, model)
+    web_urls = [c["url"] for c in candidates]
 
     # 4) Split URLs: PDF separately handled, остальные через ingest
     pdf_urls = [u for u in web_urls if is_pdf_url(u)][:5]   # max 5 PDF
@@ -515,7 +608,43 @@ async def find_gold_sources_extended(client: AsyncOpenAI,
     # Продуктовая дисциплина: убрать источники про чужой продукт
     all_sources = _filter_by_product(all_sources, entity)
 
-    top = all_sources[:top_n]
+    # РЕЛЕВАНТНЫЙ ПОЛ: жёстко off-topic источники (их gold_score обрушен topic-
+    # штрафом) ОТСЕКАЕМ, а не добиваем ими список. По запросу «автоперевод» лучше
+    # 3 страницы про автоперевод, чем 10 с подмешанными «вкладами». Сохраняем
+    # минимум, чтобы не обнулить банк полностью (оркестратор пометит «мало данных»).
+    if all_sources:
+        best_gold = max((s.gold_score for s in all_sources), default=0.0)
+        floor = max(0.3, 0.22 * best_gold)
+        on_topic = [s for s in all_sources if s.gold_score >= floor]
+        if len(on_topic) >= 2:
+            dropped = len(all_sources) - len(on_topic)
+            if dropped:
+                log.warning("[extended_finder] %s: отсеяно %s off-topic источников "
+                             "(ниже relevance-пола %.2f)", entity.bank_slug, dropped, floor)
+            all_sources = on_topic
+        else:
+            # данных по теме мало — оставляем топ-3, не обнуляем банк
+            all_sources = sorted(all_sources, key=lambda x: -x.gold_score)[:3]
+
+    # Резервируем слоты под СОБСТВЕННЫЕ страницы банка (item 46), НО только среди
+    # уже отфильтрованных по теме (офиц. deposit-страница не должна занимать слот
+    # в отчёте про автоперевод — она уже отсечена полом выше).
+    _dom = (entity.bank_domain or "").replace("www.", "")
+    def _is_bank_own(s) -> bool:
+        return (((getattr(s, "trust_score", 0) or 0) >= 0.9)
+                or (bool(_dom) and _dom in (s.url or ""))
+                or getattr(s, "is_product_url", False)
+                or is_pdf_url(s.url))
+    if len(all_sources) > top_n:
+        own = [s for s in all_sources if _is_bank_own(s)]
+        rest = [s for s in all_sources if not _is_bank_own(s)]
+        reserve = min(len(own), max(2, top_n // 2))
+        kept = own[:reserve] + rest[:max(0, top_n - reserve)]
+        if len(kept) < top_n:
+            kept += [s for s in own[reserve:] if s not in kept][:top_n - len(kept)]
+        top = sorted(kept, key=lambda x: -x.gold_score)[:top_n]
+    else:
+        top = all_sources[:top_n]
     log.warning("[extended_finder] %s: %s sources final (%s PDF, %s HTML/DB)",
                  entity.bank_slug, len(top),
                  sum(1 for s in top if is_pdf_url(s.url)),

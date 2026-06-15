@@ -72,8 +72,9 @@ def _has_program_signal(f: Fact) -> bool:
 
 
 async def generate(ctx: NarrativeContext) -> str:
+    from .base import box_gate
     prog_facts = [f for f in ctx.facts if _has_program_signal(f)]
-    if not prog_facts:
+    if not box_gate(prog_facts, ctx.entities, min_facts=2, require_multi_bank=False):
         return ""
 
     facts_str = format_facts_for_prompt(prog_facts, max_facts=25)
@@ -150,7 +151,7 @@ async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
                 ],
                 max_tokens=1200, temperature=0.0,
             ),
-            timeout=40,
+            timeout=120,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:

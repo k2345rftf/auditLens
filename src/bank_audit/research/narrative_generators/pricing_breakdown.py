@@ -211,7 +211,7 @@ async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
                 ],
                 max_tokens=2000, temperature=0.0,
             ),
-            timeout=60,
+            timeout=120,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:

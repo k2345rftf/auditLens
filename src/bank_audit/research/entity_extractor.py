@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 from sqlalchemy import text as _t
 
 from .. import db
-from ..ai.deep_research import _loose_json_loads, normalize_question
+from ..ai.llm_utils import _loose_json_loads, normalize_question
 
 log = logging.getLogger(__name__)
 
@@ -293,12 +293,17 @@ async def extract_entities(client: AsyncOpenAI, question: str,
     # из вопроса (нестабильность model'и), добавим его с общим product
     # из первой entity (LLM правильно понял product, просто пропустил bank).
     try:
-        from ..ai.deep_research import detect_bank_slugs
+        from ..ai.llm_utils import detect_bank_slugs
         keyword_banks = detect_bank_slugs(question)
         already = {e.bank_slug for e in entities}
         missing = [b for b in keyword_banks if b not in already]
-        if missing and entities:
-            template = entities[0]   # копируем product/synonyms из первой entity
+        # Клонируем product на пропущенный банк ТОЛЬКО если вопрос ОДНОПРОДУКТОВЫЙ
+        # (у всех entity один и тот же продукт). При мультипродуктовом вопросе
+        # («ипотека Сбера vs вклад ВТБ») копирование product[0] на чужой банк
+        # заставило бы искать НЕ ТОТ продукт — лучше пропустить (item 21).
+        distinct_products = {e.product.strip().lower() for e in entities}
+        if missing and entities and len(distinct_products) == 1:
+            template = entities[0]
             for slug in missing:
                 bank = _resolve_bank(slug, banks)
                 if not bank: continue
@@ -311,6 +316,10 @@ async def extract_entities(client: AsyncOpenAI, question: str,
                     audience=template.audience,
                 ))
             log.warning("[entity_extractor] keyword fallback added: %s", missing)
+        elif missing and len(distinct_products) > 1:
+            log.warning("[entity_extractor] мультипродуктовый вопрос — НЕ клонирую "
+                         "product на пропущенные банки %s (искали бы не тот продукт)",
+                         missing)
     except Exception as e:
         log.info("entity_extractor keyword fallback failed: %s", e)
 

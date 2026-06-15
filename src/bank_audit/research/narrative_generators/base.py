@@ -49,6 +49,10 @@ class NarrativeContext:
     # Аналитический меморандум (research_brief) — единый «мозг» отчёта.
     # type: ResearchBrief | None (без импорта во избежание цикла)
     brief: object = None
+    # Сравнительная матрица — чтобы key_findings/risks заземлялись на РЕАЛЬНЫХ
+    # дельтах (matrix.variance) и конфликтах, а не писали «общий» текст.
+    # type: Matrix | None (без импорта во избежание цикла)
+    matrix: object = None
 
     def brief_block(self, kind: str = "") -> str:
         """Блок меморандума + директива секции для подмешивания в промпт."""
@@ -299,30 +303,37 @@ def _is_derived_number(n: float, fact_nums: set[float], tol: float = 0.02) -> bo
     Позволяет нарративу делать сравнительные выводы («в 2 раза», «на 30%»,
     «на 1290 ₽ дороже»), не помечая их галлюцинацией.
 
-    ВАЖНО: большие АБСОЛЮТНЫЕ значения (>100 000) НЕ считаем производными — при
-    десятках фактов почти любое 6-7-значное число случайно попадает в diff/ratio
-    какой-то пары (ложные «переплаты ~1 200 000 ₽»). Такие суммы обязаны быть
-    реальными фактами, а не вычислением модели."""
-    if abs(n) > 100_000:
-        return False
+    ДЛЯ БОЛЬШИХ значений (>100 000) — например «переплата 1 200 000 ₽» —
+    раньше выводы ПОЛНОСТЬЮ отбрасывались (cap return False), и аудитор терял
+    самые важные дельты. Теперь большие числа РАЗРЕШЕНЫ как РАЗНОСТЬ двух
+    фактов, но с УЖЕСТОЧЁННЫМ допуском (чтобы случайные совпадения 6-7-значных
+    чисел не проходили) и только как разность, не ratio/процент."""
+    big = abs(n) > 100_000
+    eff_tol = 0.004 if big else tol   # для больших — жёстче (меньше совпадений)
+    abs_tol = 0.5 if big else 0.05
     nums = [x for x in fact_nums if x]
     nums = sorted(nums, key=lambda x: -abs(x))[:60]   # ограничим O(n^2)
 
     def _close(a: float, b: float) -> bool:
         if b == 0:
             return abs(a) < 0.001
-        return abs(a - b) < 0.05 or abs(a - b) / abs(b) < tol
+        return abs(a - b) < abs_tol or abs(a - b) / abs(b) < eff_tol
 
     for a in nums:
         for b in nums:
             if a == b:
                 continue
-            if _close(n, abs(a - b)):           # разность
+            if _close(n, abs(a - b)):           # разность (переплата/экономия)
                 return True
-            if b and _close(n, a / b):          # кратность (в N раз)
+            # % от суммы: комиссия 1,5% от 150 000 ₽ = 2250 ₽ (a — сумма, b — %).
+            # Частая легитимная производная в аудите стоимости.
+            if 0 < b <= 100 and _close(n, a * b / 100.0):
                 return True
-            if b and _close(n, abs(a - b) / abs(b) * 100):  # процентная разница
-                return True
+            if not big:
+                if b and _close(n, a / b):          # кратность (в N раз)
+                    return True
+                if b and _close(n, abs(a - b) / abs(b) * 100):  # процентная разница
+                    return True
     return False
 
 
@@ -503,6 +514,25 @@ def select_facts_for_section(facts: list[Fact], section_kind: str = "",
                     break
         idx += 1
     return out
+
+
+def box_gate(facts: list[Fact], entities: list, *, min_facts: int = 2,
+             require_multi_bank: bool = True) -> bool:
+    """Порог запуска опциональной секции-бокса: достаточно ли РЕАЛЬНОЙ массы
+    фактов, чтобы секция несла ценность, а не плодила заголовок ради одного
+    случайного факта (item 27).
+
+    • min_facts — минимум релевантных фактов;
+    • require_multi_bank — при ≥2 банках требуем, чтобы факты покрывали ≥2 банка
+      (иначе это разрозненный факт одного банка, а не сравнение)."""
+    real = [f for f in facts if getattr(f, "attribute", "") != "продукт_доступен"]
+    if len(real) < min_facts:
+        return False
+    if require_multi_bank and len(entities) >= 2:
+        banks = {f.entity_bank_slug for f in real}
+        if len(banks) < 2:
+            return False
+    return True
 
 
 def facts_for_entity(facts: list[Fact], bank_slug: str) -> list[Fact]:

@@ -137,13 +137,36 @@ def _matrix_summary(matrix: Matrix, core_schema: list[CoreAttr] | None) -> str:
     return "\n".join(lines)
 
 
-def _top_excerpts(sources_index: list[dict], max_n: int = 8,
+def _top_excerpts(sources_index: list[dict], max_n: int = 10,
                     per_chars: int = 600) -> str:
-    """Сырые выдержки источников — чтобы синтез видел живой язык, не только факты."""
-    ranked = sorted(sources_index,
-                     key=lambda s: -(s.get("trust_score") or 0))
+    """Сырые выдержки источников — чтобы синтез видел живой язык, не только факты.
+
+    ПО-БАНКОВЫЙ round-robin (item 43): сначала по одной лучшей выдержке КАЖДОГО
+    банка, потом добиваем остаток по trust. Иначе brief видел выдержки только
+    лучше-источенных банков, и хуже-покрытые выпадали из синтеза."""
+    by_bank: dict[str, list[dict]] = {}
+    for s in sources_index:
+        if not (s.get("excerpts")):
+            continue
+        by_bank.setdefault(s.get("bank_slug") or "__shared__", []).append(s)
+    for slug in by_bank:
+        by_bank[slug].sort(key=lambda s: -(s.get("trust_score") or 0))
+
+    picked: list[dict] = []
+    seen_n = set()
+    # round-robin
+    idx = 0
+    while len(picked) < max_n and any(idx < len(v) for v in by_bank.values()):
+        for slug, lst in by_bank.items():
+            if idx < len(lst) and lst[idx].get("n") not in seen_n:
+                picked.append(lst[idx])
+                seen_n.add(lst[idx].get("n"))
+                if len(picked) >= max_n:
+                    break
+        idx += 1
+
     out = []
-    for s in ranked[:max_n]:
+    for s in picked:
         exc = " ".join(s.get("excerpts") or [])[:per_chars].strip()
         if not exc:
             continue
@@ -161,8 +184,16 @@ async def synthesize_brief(client: AsyncOpenAI, question: str,
         return None
     model = model or os.getenv("LLM_MODEL_REASONING") or \
               os.getenv("LLM_MODEL_SMART") or os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    # Качество ВСЕГО отчёта держится на этом синтезе. Если reasoning-модель не
+    # задана и используется дешёвый fallback — громко предупреждаем (item 38).
+    if not os.getenv("LLM_MODEL_REASONING"):
+        log.warning("[research_brief] LLM_MODEL_REASONING не задан → синтез на "
+                     "fallback-модели %s. Для глубины задайте reasoning-модель.", model)
 
-    facts_block = format_facts_for_prompt(facts, with_source=True, max_facts=80)
+    # Кормим больше фактов, чем прежние 80 (для multi-bank 80 срезало картину),
+    # но без перегиба: 110 — баланс глубины и риска таймаута на одном «тяжёлом»
+    # reasoning-вызове (синтез — самый ценный шаг, его нельзя терять по таймауту).
+    facts_block = format_facts_for_prompt(facts, with_source=True, max_facts=110)
     matrix_block = _matrix_summary(matrix, core_schema)
     excerpts_block = _top_excerpts(sources_index)
 
@@ -185,10 +216,10 @@ async def synthesize_brief(client: AsyncOpenAI, question: str,
                 # CoT в content и ломает JSON. Дефолтный effort даёт чистый JSON.
                 # Когда LLM_MODEL_REASONING = настоящая reasoning-модель — поднять.
             ),
-            timeout=120,
+            timeout=170,   # запас под «тяжёлый» reasoning-вызов под нагрузкой
         )
     except Exception as e:
-        log.warning("[research_brief] LLM failed: %s — fallback без brief", e)
+        log.warning("[research_brief] LLM failed: %r — fallback без brief", e)
         return None
 
     data = parse_json_object(resp.choices[0].message.content or "")

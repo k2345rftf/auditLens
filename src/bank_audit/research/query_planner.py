@@ -140,8 +140,11 @@ async def plan_queries(client: AsyncOpenAI,
         ))
 
     # ── 5) Attribute-specific (LLM-driven) ──────────────────────────────
+    # Масштабируем число attribute-queries под размер core-схемы: на 15-20
+    # атрибутов 5 запросов не покрывали нишевые комиссии/лимиты (item 48).
+    n_attr_q = max(5, min(len(core_schema or []), 12))
     attribute_queries = await _generate_attribute_queries(
-        client, entity, core_schema or [], model=model, max_n=5,
+        client, entity, core_schema or [], model=model, max_n=n_attr_q,
     )
     queries.extend(attribute_queries)
 

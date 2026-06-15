@@ -82,17 +82,29 @@ SYSTEM_PROMPT = """Ты — аудитор-аналитик. Пишешь СВЯ
 БЕЗ преамбулы, БЕЗ markdown fences."""
 
 
+def _real_facts(facts: list[Fact]) -> list[Fact]:
+    return [f for f in facts if f.attribute != "продукт_доступен"]
+
+
 async def generate(ctx: NarrativeContext, core_attrs: list[str] | None = None) -> str:
-    """Главная: генерирует секцию per-bank для всех entity."""
+    """Главная: генерирует секцию per-bank ТОЛЬКО для банков с реальными данными.
+
+    Банки без данных НЕ получают полноценную секцию (это была ложная симметрия:
+    банк с 6 фактами и банк с 0 выглядели одинаково «покрытыми»). Они сводятся
+    в одну честную строку «недостаточно данных», чтобы перекос был ВИДЕН."""
     if not ctx.entities:
         return ""
 
-    # Параллельный вызов LLM для каждого банка
-    coros = []
+    rich, thin = [], []
     for e in ctx.entities:
-        ent_facts = facts_for_entity(ctx.facts, e.bank_slug)
-        coros.append(_generate_for_one(ctx, e, ent_facts, core_attrs or []))
+        ent_facts = _real_facts(facts_for_entity(ctx.facts, e.bank_slug))
+        (rich if ent_facts else thin).append((e, ent_facts))
 
+    if not rich:
+        return ""   # вообще нет данных ни по одному банку — секцию не рендерим
+
+    coros = [_generate_for_one(ctx, e, ent_facts, core_attrs or [])
+             for e, ent_facts in rich]
     bank_blocks = await asyncio.gather(*coros, return_exceptions=False)
 
     lines = ["## 🏦 Детально по каждому банку", ""]
@@ -100,21 +112,20 @@ async def generate(ctx: NarrativeContext, core_attrs: list[str] | None = None) -
         if block:
             lines.append(block)
             lines.append("")
+    if thin:
+        names = ", ".join(e.bank_name for e, _ in thin)
+        lines.append(f"⚠ **Недостаточно данных в открытых источниках:** {names}. "
+                      f"По этим банкам источник не прочитан/не проиндексирован — "
+                      f"это НЕ значит отсутствие продукта; нужна прямая сверка тарифов.")
+        lines.append("")
     return "\n".join(lines).rstrip()
 
 
 async def _generate_for_one(ctx: NarrativeContext, entity: Entity,
                               facts: list[Fact], core_attrs: list[str]) -> str:
-    """Narrative для одного банка."""
+    """Narrative для одного банка (вызывается только если есть реальные факты)."""
     if not facts:
-        return _empty_block(entity)
-
-    # «Особый случай»: единственный факт = «продукт_доступен: не найден»
-    if len(facts) == 1 and facts[0].attribute == "продукт_доступен":
-        f = facts[0]
-        return (f"### {entity.bank_name}\n"
-                f"_Продукт: {entity.product}_\n\n"
-                f"⚠ {f.value}. {f.verbatim_quote or ''}".strip())
+        return ""
 
     facts_str = format_facts_for_prompt(facts, max_facts=30)
     core_hint = ""
@@ -169,7 +180,7 @@ async def _generate_for_one(ctx: NarrativeContext, entity: Entity,
     if not isinstance(missing, list):
         missing = []
 
-    return _render_block(entity, narrative, highlight, missing, facts)
+    return _render_block(entity, narrative, highlight, missing, facts, core_attrs)
 
 
 async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
@@ -183,7 +194,7 @@ async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
                 ],
                 max_tokens=1500, temperature=0.0,
             ),
-            timeout=45,
+            timeout=120,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
@@ -203,14 +214,18 @@ _CATEGORY_ORDER = ["fee", "rate", "limit", "requirement", "feature", "regulation
 _PRIO_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
-def _facts_appendix(facts: list[Fact], max_total: int = 40) -> str:
-    """Детерминированный реестр ВСЕХ параметров банка по категориям.
+def _extra_facts(facts: list[Fact], core_attrs: list[str],
+                  max_total: int = 14) -> str:
+    """Детерминированный список ТОЛЬКО банк-специфичных доп. параметров,
+    которых НЕТ в сравнительной таблице (она уже показывает все core-атрибуты).
 
-    Аудитору нужны все материальные факты, а не только упомянутые в narrative.
-    Дедуп по атрибуту (лучший по приоритету), группировка по категории,
-    условия/исключения и цитата [N] у каждого.
-    """
-    real = [f for f in facts if f.attribute != "продукт_доступен"]
+    Раньше здесь дублировался «Полный реестр параметров» = те же числа, что в
+    comparison_table и pricing → отчёт читался как 3 пересказа одного и того же.
+    Теперь — только то, что таблица НЕ показала (уникальные фишки/нюансы банка),
+    без повтора core-колонок."""
+    core_set = {c.lower() for c in (core_attrs or [])}
+    real = [f for f in facts
+            if f.attribute != "продукт_доступен" and f.attribute.lower() not in core_set]
     if not real:
         return ""
     # дедуп по атрибуту: оставляем самый приоритетный
@@ -219,44 +234,29 @@ def _facts_appendix(facts: list[Fact], max_total: int = 40) -> str:
         prev = best.get(f.attribute)
         if prev is None or _PRIO_RANK.get(f.audit_priority, 3) < _PRIO_RANK.get(prev.audit_priority, 3):
             best[f.attribute] = f
-    uniq = list(best.values())
-    # группировка
-    by_cat: dict[str, list[Fact]] = {}
-    for f in uniq:
-        by_cat.setdefault(f.category if f.category in _CATEGORY_LABELS else "feature", []).append(f)
-
-    lines = ["", f"**Полный реестр параметров ({len(uniq)}):**", ""]
-    shown = 0
-    for cat in _CATEGORY_ORDER:
-        group = by_cat.get(cat)
-        if not group:
-            continue
-        group.sort(key=lambda f: _PRIO_RANK.get(f.audit_priority, 3))
-        lines.append(f"_{_CATEGORY_LABELS[cat]}:_")
-        for f in group:
-            if shown >= max_total:
-                break
-            val = f"{f.value} {f.unit}".strip()
-            cite = f" [{f.source_idx}]" if f.source_idx else ""
-            extra = ""
-            if f.conditions:
-                extra += f" — при условиях: {'; '.join(f.conditions[:3])}"
-            if f.exceptions:
-                extra += f" — исключения: {'; '.join(f.exceptions[:2])}"
-            if f.qualifications:
-                extra += f" — {f.qualifications}"
-            attr_h = f.attribute.replace("_", " ")
-            lines.append(f"- **{attr_h}**: {val}{extra}{cite}")
-            shown += 1
-        lines.append("")
-        if shown >= max_total:
-            lines.append("_(показаны первые параметры; полный список — в источниках)_")
-            break
+    uniq = sorted(best.values(), key=lambda f: _PRIO_RANK.get(f.audit_priority, 3))
+    if not uniq:
+        return ""
+    lines = ["", "_Дополнительно у этого банка (вне core-таблицы):_"]
+    for f in uniq[:max_total]:
+        val = f"{f.value} {f.unit}".strip()
+        cite = f" [{f.source_idx}]" if f.source_idx else ""
+        extra = ""
+        if f.conditions:
+            extra += f" — при условиях: {'; '.join(f.conditions[:3])}"
+        if f.exceptions:
+            extra += f" — исключения: {'; '.join(f.exceptions[:2])}"
+        if f.qualifications:
+            extra += f" — {f.qualifications}"
+        lines.append(f"- **{f.attribute.replace('_', ' ')}**: {val}{extra}{cite}")
+    if len(uniq) > max_total:
+        lines.append(f"- _…и ещё {len(uniq) - max_total} — см. полную матрицу в экспорте._")
     return "\n".join(lines).rstrip()
 
 
 def _render_block(entity: Entity, narrative: str, highlight: str,
-                    missing: list[str], facts: list[Fact]) -> str:
+                    missing: list[str], facts: list[Fact],
+                    core_attrs: list[str] | None = None) -> str:
     n_high = sum(1 for f in facts if f.audit_priority == "high")
     real_n = sum(1 for f in facts if f.attribute != "продукт_доступен")
     parts = [
@@ -268,11 +268,11 @@ def _render_block(entity: Entity, narrative: str, highlight: str,
     if highlight:
         parts.append("")
         parts.append(f"> **Источник дословно:** _{highlight[:300]}_")
-    # Полный реестр параметров (аудит-глубина: показываем ВСЕ факты, не только narrative)
-    appendix = _facts_appendix(facts)
-    if appendix:
+    # Только банк-специфичные доп. факты (НЕ дублируем core-таблицу)
+    extra = _extra_facts(facts, core_attrs or [])
+    if extra:
         parts.append("")
-        parts.append(appendix)
+        parts.append(extra)
     if missing:
         clean_missing = [str(m).strip() for m in missing if m][:5]
         if clean_missing:

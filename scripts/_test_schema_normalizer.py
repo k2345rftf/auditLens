@@ -6,7 +6,7 @@ load_dotenv()
 
 from bank_audit.research.triple_extractor import Triple
 from bank_audit.research.schema_normalizer import normalize_schema, apply_normalization
-from bank_audit.ai.deep_research import _patch_client_reasoning_effort
+from bank_audit.ai.llm_utils import _patch_client_reasoning_effort
 
 # Симулируем триплы от 3 банков, где одни и те же поля названы по-разному
 TRIPLES = [

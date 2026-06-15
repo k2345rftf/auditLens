@@ -47,11 +47,17 @@ SYSTEM_PROMPT = """Ты — нормализатор схемы данных. П
 
 
 async def normalize_schema(client: AsyncOpenAI, triples: list[Triple] | list[Fact],
-                            model: str | None = None) -> dict[str, str]:
+                            model: str | None = None,
+                            core_attrs: list[str] | None = None) -> dict[str, str]:
     """Возвращает mapping: исходный_attribute → canonical_attribute.
 
-    Если ничего не удалось нормализовать (LLM упал) — возвращает identity-map
-    (каждый attribute сам себе canonical).
+    core_attrs — канонические имена core-схемы. Передаются в LLM как
+    ПРЕДПОЧТИТЕЛЬНЫЕ канонические имена: если кластер синонимов описывает core-слот,
+    он должен получить именно core-имя (иначе синонимы «годовая_комиссия» /
+    «плата_за_обслуживание» остаются двумя разрежёнными колонками и таблица
+    разъезжается). Сами core-атрибуты пинуются на себя (LLM их не переименует).
+
+    Если ничего не удалось нормализовать (LLM упал) — возвращает identity-map.
     """
     model = model or os.getenv("LLM_MODEL_FAST") or os.getenv("LLM_MODEL_NAME",
                                                                 "gpt-4o-mini")
@@ -63,12 +69,22 @@ async def normalize_schema(client: AsyncOpenAI, triples: list[Triple] | list[Fac
     if not seen:
         return {}
 
+    core_names = [a.strip().lower() for a in (core_attrs or []) if a and a.strip()]
     attrs_block = "\n".join(
         f"  • {a}: пример «{v[0]}» {v[1]}".rstrip()
         for a, v in seen.items()
     )
+    core_hint = ""
+    if core_names:
+        core_hint = (
+            "\n# ПРЕДПОЧТИТЕЛЬНЫЕ КАНОНИЧЕСКИЕ ИМЕНА (core-схема продукта)\n"
+            "Если кластер синонимов описывает один из этих параметров — используй "
+            "РОВНО это имя как canonical (это колонки сравнительной таблицы):\n"
+            + "\n".join(f"  • {c}" for c in core_names) + "\n"
+        )
     user_msg = (
-        f"# Атрибуты ({len(seen)} штук, разных банков)\n{attrs_block}\n\n"
+        f"# Атрибуты ({len(seen)} штук, разных банков)\n{attrs_block}\n"
+        f"{core_hint}\n"
         f"Сгруппируй синонимы. Каноническое имя на каждый кластер."
     )
     try:
@@ -107,6 +123,13 @@ async def normalize_schema(client: AsyncOpenAI, triples: list[Triple] | list[Fac
             vn = str(v).strip().lower()
             if vn in seen:
                 mapping[vn] = canon
+
+    # ПИН core-атрибутов: если исходное имя совпадает с core-каноном — оно
+    # остаётся собой (LLM не должен переименовать core-колонку в синоним).
+    core_set = set(core_names)
+    for a in list(seen):
+        if a in core_set:
+            mapping[a] = a
 
     # Fallback для атрибутов, которые LLM пропустил — сам себе canonical
     missed = 0

@@ -95,8 +95,9 @@ severity:
 
 async def generate(ctx: NarrativeContext) -> str:
     """Главная."""
+    from .base import box_gate
     neg_facts = [f for f in ctx.facts if _has_negative_signal(f)]
-    if not neg_facts:
+    if not box_gate(neg_facts, ctx.entities, min_facts=2, require_multi_bank=False):
         return ""
 
     facts_str = format_facts_for_prompt(neg_facts, max_facts=30)
@@ -198,7 +199,7 @@ async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
                 ],
                 max_tokens=1500, temperature=0.0,
             ),
-            timeout=45,
+            timeout=120,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:

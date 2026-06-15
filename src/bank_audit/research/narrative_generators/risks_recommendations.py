@@ -94,10 +94,18 @@ async def generate(ctx: NarrativeContext,
     conflicts — конфликтующие триплы из matrix
     """
     if not ctx.facts:
-        return _empty_section()
+        return ""   # пустую секцию-заглушку не рендерим
 
     high_facts = facts_by_priority(ctx.facts, ["high"])
     facts_str = format_facts_for_prompt(high_facts or ctx.facts, max_facts=30)
+
+    # Заземление на РЕАЛЬНЫХ дельтах матрицы (item 25): рекомендации должны
+    # ссылаться на конкретные расхождения, а не быть «запросить тарифы».
+    try:
+        from .key_findings import _delta_hint
+        delta_block, _ = _delta_hint(getattr(ctx, "matrix", None))
+    except Exception:
+        delta_block = ""
 
     gaps_str = "(нет)"
     if gaps:
@@ -121,11 +129,14 @@ async def generate(ctx: NarrativeContext,
     user_msg = (
         (brief_block + "\n\n" if brief_block else "")
         + f"# Вопрос аудитора\n{ctx.question}\n\n"
-        f"# Главные факты ({len(high_facts or ctx.facts)})\n{facts_str}\n\n"
+        + (delta_block + "\n" if delta_block else "")
+        + f"# Главные факты ({len(high_facts or ctx.facts)})\n{facts_str}\n\n"
         f"# Пробелы (не раскрыто)\n{gaps_str}\n\n"
         f"# Конфликты в источниках\n{conflicts_str}\n\n"
-        f"Опираясь на меморандум (критичные пробелы и ловушки), напиши "
-        f"risk_scenarios + recommendations + open_questions. JSON."
+        f"Опираясь на меморандум, КРУПНЕЙШИЕ РАСХОЖДЕНИЯ выше, пробелы и конфликты, "
+        f"напиши risk_scenarios + recommendations + open_questions. Рекомендации — "
+        f"КОНКРЕТНЫЕ и привязанные к числам/банкам («X дороже Y на N ₽ — проверить "
+        f"условие Z»), НЕ общие фразы. JSON."
     )
 
     raw = await _llm_call(ctx, user_msg)
@@ -250,7 +261,7 @@ async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
                 ],
                 max_tokens=2000, temperature=0.0,
             ),
-            timeout=60,
+            timeout=120,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:

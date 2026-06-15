@@ -67,8 +67,10 @@ SYSTEM_PROMPT = """Ты — аудитор пишущий блок ДИСТАН�
 
 
 async def generate(ctx: NarrativeContext) -> str:
+    from .base import box_gate
     digital_facts = [f for f in ctx.facts if _is_digital_fact(f)]
-    if not digital_facts:
+    # Гейт: не плодим секцию из одного-двух разрозненных упоминаний.
+    if not box_gate(digital_facts, ctx.entities, min_facts=2, require_multi_bank=True):
         return ""
 
     facts_str = format_facts_for_prompt(digital_facts, max_facts=25)
@@ -148,7 +150,7 @@ async def _llm_call(ctx: NarrativeContext, user_msg: str) -> str:
                 ],
                 max_tokens=1200, temperature=0.0,
             ),
-            timeout=40,
+            timeout=120,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:

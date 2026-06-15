@@ -55,39 +55,155 @@ SECTION_GENERATORS: dict[str, Callable[..., Awaitable[str]]] = {
 }
 
 
+_SUP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _superscript(n: int) -> str:
+    return str(n).translate(_SUP)
+
+
+def _cell_detail(t) -> str:
+    """Расшифровка для сноски: лесенка ступеней / расхождение источников /
+    условия-сегмент-исключения."""
+    members = getattr(t, "members", None) or []
+    distinct_vals = {f"{m.value}{m.unit}" for m in members}
+    if len(members) > 1 and len(distinct_vals) > 1:
+        # Лесенка (разные условия) vs расхождение источников (одинаковые условия,
+        # разные значения). Лейбл должен это различать, чтобы не выдать
+        # противоречие источников за легитимные «ступени».
+        cond_keys = {(tuple(sorted(m.conditions or [])), (m.qualifications or ""))
+                     for m in members}
+        label = "ступени" if len(cond_keys) > 1 else "расхождение источников"
+        steps = []
+        for m in members:
+            q = m.qualifier_text() if hasattr(m, "qualifier_text") else ""
+            v = f"{m.value} {m.unit}".strip()
+            cite = f" [{m.source_idx}]" if getattr(m, "source_idx", 0) else ""
+            steps.append((f"{v} ({q})" if q else v) + cite)
+        return f"{label} — " + "; ".join(steps)
+    q = t.qualifier_text() if hasattr(t, "qualifier_text") else ""
+    return q
+
+
 def _comparison_table_md(matrix: Matrix) -> str:
-    """Markdown сравнительной таблицы из Matrix (детерминированный, без LLM)."""
+    """Markdown сравнительной таблицы из Matrix (детерминированный, без LLM).
+
+    Главные правки против «голой» таблицы:
+      • условные значения помечаются «·усл.» + сноска с расшифровкой;
+      • тарифные лесенки раскрываются в сноске (ступени с условиями и цитатами);
+      • пустые клетки различают «нет данных (источник не прочитан)» и
+        «не раскрыто»;
+      • НЕТ жёсткого cap 15 — показываются все core-атрибуты (плюс заметные
+        не-core), полная матрица доступна в экспорте.
+    """
     if not matrix.entities or not matrix.attributes:
         return "## 📋 Сравнительная таблица\n\n_Нет данных для сравнения._"
 
     core = getattr(matrix, "core_attrs", []) or []
-    if core:
-        top_attrs = [a for a in core if a in matrix.attributes][:15]
-    else:
-        attr_filled = {}
-        for attr in matrix.attributes:
-            attr_filled[attr] = sum(1 for e in matrix.entities
-                                       if matrix.cell(e.bank_slug, attr) is not None)
-        top_attrs = sorted(attr_filled.keys(), key=lambda a: -attr_filled[a])[:15]
+    core_set = set(core)
 
-    lines = ["## 📋 Сравнительная таблица core-атрибутов", ""]
+    def _fill(attr):
+        return sum(1 for e in matrix.entities
+                    if matrix.cell(e.bank_slug, attr) is not None)
+
+    # ПРИНЦИП: таблица показывает то, что РЕАЛЬНО НАЙДЕНО, а не пустой каркас.
+    #   • core-атрибуты с данными (≥1 банк) — первыми, в порядке core-схемы;
+    #   • ЛЮБОЙ заполненный не-core атрибут (≥1 банк) — следом по убыванию охвата
+    #     (так богатые факты Сбера попадают в таблицу, даже если core-схема их
+    #      назвала иначе и нормализатор не свёл);
+    #   • core-атрибуты, ПУСТЫЕ У ВСЕХ, в таблицу НЕ идут — они уже перечислены
+    #     в блоке «Что не удалось определить» (иначе 14 пустых строк = та самая
+    #     «вода»). Полная матрица (включая пустые) — в CSV/JSON-экспорте.
+    # Расхламление: не-core атрибут, заполненный лишь у ОДНОГО банка при сравнении
+    # ≥3 банков, ничего не сравнивает (это разрозненный слот вроде «Назначение/Цель
+    # перевода») — в таблицу не идёт, остаётся в полной матрице-экспорте. Core-слоты
+    # порог не трогает (они — каркас схемы; их пробелы видны в «Что не удалось»).
+    noncore_min = 2 if len(matrix.entities) >= 3 else 1
+    core_filled = [a for a in core if a in matrix.attributes and _fill(a) >= 1]
+    noncore_filled = sorted([a for a in matrix.attributes
+                              if a not in core_set and _fill(a) >= noncore_min],
+                             key=lambda a: (-_fill(a), a))
+    insufficient = getattr(matrix, "insufficient_banks", set()) or set()
+    top_attrs = core_filled + noncore_filled
+    if not top_attrs:
+        # совсем ничего не нашли — показываем немного core как пустой каркас
+        top_attrs = [a for a in core if a in matrix.attributes][:6]
+
+    lines = ["## 📋 Сравнительная таблица параметров", ""]
     header = "| Параметр | " + " | ".join(e.bank_name for e in matrix.entities) + " |"
     sep    = "|---" + ("|---" * len(matrix.entities)) + "|"
     lines.append(header)
     lines.append(sep)
+
+    footnotes: list[str] = []
+    fn_n = 0
     for attr in top_attrs:
         row_label = attr.replace("_", " ").capitalize()
         row_cells = []
         for e in matrix.entities:
             t = matrix.cell(e.bank_slug, attr)
             if t is None:
-                row_cells.append("⚠ Не раскрыто")
+                row_cells.append("⚠ нет данных" if e.bank_slug in insufficient
+                                   else "⚠ Не раскрыто")
                 continue
-            val = f"{t.value} {t.unit}".strip()
+            base = t.cell_text() if hasattr(t, "cell_text") else f"{t.value} {t.unit}".strip()
             cite = f" [{t.source_idx}]" if getattr(t, "source_idx", 0) else ""
-            row_cells.append(f"{val}{cite}")
+            detail = _cell_detail(t)
+            if detail:
+                fn_n += 1
+                footnotes.append(f"{_superscript(fn_n)} **{e.bank_name} · {row_label}**: {detail}")
+                row_cells.append(f"{base}{cite}{_superscript(fn_n)}")
+            else:
+                row_cells.append(f"{base}{cite}")
         lines.append(f"| {row_label} | " + " | ".join(row_cells) + " |")
+
+    if footnotes:
+        lines.append("")
+        lines.append("> **Условия и ступени** (·усл. = значение действует не для всех / есть градации):")
+        lines.append(">")
+        for fn in footnotes:
+            lines.append(f"> {fn}")
     return "\n".join(lines)
+
+
+def _gaps_md(matrix: Matrix, core_schema: list[CoreAttr] | None = None,
+             brief_gaps: list[str] | None = None) -> str:
+    """Блок «Что НЕ удалось определить» — пробелы как first-class артефакт,
+    рядом с таблицей, а не закопанные в прозу. Объединяет:
+      • core-атрибуты, не раскрытые ни одним / частью банков;
+      • банки без данных (источник не прочитан);
+      • критичные пробелы из аналитического меморандума (brief)."""
+    core_names = [a.name for a in (core_schema or [])] or list(matrix.attributes)
+    lines_out: list[str] = []
+    # банки без данных
+    insuff = getattr(matrix, "insufficient_banks", set()) or set()
+    if insuff:
+        names = [e.bank_name for e in matrix.entities if e.bank_slug in insuff]
+        if names:
+            lines_out.append(f"- **Нет данных по банкам:** {', '.join(names)} — "
+                             f"источник не прочитан/заблокирован (это НЕ значит, что "
+                             f"банк не предлагает продукт; нужна прямая сверка тарифов).")
+    # core-параметры, не раскрытые хотя бы у части банков
+    partial, full_missing = [], []
+    for a in core_names:
+        miss = [e.bank_name for e in matrix.entities
+                if matrix.cell(e.bank_slug, a) is None]
+        if not miss:
+            continue
+        label = a.replace("_", " ")
+        if len(miss) == len(matrix.entities):
+            full_missing.append(label)
+        else:
+            partial.append(f"{label} (нет у {', '.join(miss)})")
+    if full_missing:
+        lines_out.append(f"- **Не раскрыто ни одним банком:** {', '.join(full_missing)}.")
+    if partial:
+        lines_out.append("- **Раскрыто частично:** " + "; ".join(partial) + ".")
+    for g in (brief_gaps or []):
+        lines_out.append(f"- {g}")
+    if not lines_out:
+        return ""
+    return "## 🕳 Что не удалось определить\n\n" + "\n".join(lines_out)
 
 
 def _methodology_md(matrix: Matrix, entities: list[Entity], facts: list[Fact],
@@ -103,11 +219,8 @@ def _methodology_md(matrix: Matrix, entities: list[Entity], facts: list[Fact],
     n_core = len(core_names)
     lines = ["## 🔍 Методология и охват данных", ""]
     lines.append(
-        "**Метод:** факты извлечены из открытых источников и привязаны к цитате "
-        "[N]; числовые значения сверены с текстом источника (анти-галлюцинация); "
-        "характеристики, не подтверждённые источником, помечены «⚠ Не раскрыто». "
-        "Покрытие core-схемы = доля ключевых параметров продукта, по которым "
-        "найдено подтверждённое значение.")
+        "**Метод:** факты извлечены из открытых источников с привязкой к цитате [N]; "
+        "покрытие = доля core-параметров с подтверждённым значением.")
     lines.append("")
 
     # Факты и источники по банкам
@@ -190,8 +303,10 @@ def _methodology_md(matrix: Matrix, entities: list[Entity], facts: list[Fact],
             if len(missing) == len(entities):
                 undisclosed.append(a.replace("_", " "))
         if undisclosed:
+            shown = ", ".join(undisclosed[:20])
+            extra = f" (и ещё {len(undisclosed) - 20})" if len(undisclosed) > 20 else ""
             limitations.append(
-                f"**Не раскрыто ни одним банком:** {', '.join(undisclosed[:10])} — "
+                f"**Не раскрыто ни одним банком:** {shown}{extra} — "
                 f"эти параметры отсутствуют в открытых источниках у всех "
                 f"сравниваемых банков.")
     limitations.append(
@@ -213,7 +328,7 @@ def _sources_md(sources_index: list[dict]) -> str:
     lines = [f"## 📚 Источники ({len(sources_index)})", ""]
     for s in sources_index:
         n = s.get("n", "?")
-        title = (s.get("title") or s.get("url", ""))[:90]
+        title = (s.get("title") or s.get("url", ""))[:160]
         ts = s.get("trust_score", 0)
         domain = s.get("domain", "")
         trust = "●●●" if ts >= 0.9 else "●●○" if ts >= 0.6 else "○○○"
@@ -235,7 +350,8 @@ def _conflicts_md(matrix: Matrix) -> str:
     lines.append("По следующим параметрам источники дают **разные значения** — "
                   "аудитору необходимо сверить с первоисточником банка:")
     lines.append("")
-    for (bank, attr), group in list(conflicts.items())[:12]:
+    _conf_items = list(conflicts.items())
+    for (bank, attr), group in _conf_items[:30]:
         bank_name = name_by_slug.get(bank, bank)
         variants = []
         seen = set()
@@ -248,6 +364,8 @@ def _conflicts_md(matrix: Matrix) -> str:
             variants.append(f"{val}{cite}")
         lines.append(f"- **{bank_name} — {attr.replace('_', ' ')}**: "
                       + " ↔ ".join(variants))
+    if len(_conf_items) > 30:
+        lines.append(f"- _…и ещё {len(_conf_items) - 30} расхождений — см. полную матрицу в экспорте._")
     return "\n".join(lines)
 
 
@@ -348,83 +466,97 @@ async def render_narrative_report(
         entities=entities, facts=facts, sources_index=sources_index,
         has_regulatory=has_regulatory,
         brief=brief,
+        matrix=matrix,
     )
 
-    # 1) Outline planning
-    # Если topic_profile определил applicable_section_kinds — используем как hint
-    suggested_kinds = (topic_profile.applicable_section_kinds
-                         if topic_profile else None)
-    try:
-        sections = await plan_sections(
-            client, question,
-            core_schema or [],
-            facts,
-            has_regulatory_sources=has_regulatory,
-            suggested_kinds=suggested_kinds,
-        )
-    except Exception as e:
-        log.warning("[narrative_renderer] outline failed: %s — minimal fallback", e)
-        from .outline_planner import _default_outline
-        sections = _default_outline(facts)
-        # Если есть suggested_kinds — добавляем недостающие
-        if suggested_kinds:
-            existing = {s.kind for s in sections}
-            for kind in suggested_kinds:
-                if kind not in existing and kind in SECTION_GENERATORS:
-                    sections.append(Section(
-                        kind=kind, title=kind.replace("_", " ").capitalize(),
-                        focus="", audit_relevance="",
-                    ))
+    # Этап 6: ОДИН синтез вместо 9 генераторов (флаг SYNTH_UNIFIED, по умолч. вкл).
+    import os as _os
+    _SYNTH_UNIFIED = _os.getenv("SYNTH_UNIFIED", "1").lower() in ("1", "true", "yes")
+    results = None
+    if _SYNTH_UNIFIED:
+        from .narrative_generators.unified_synthesis import generate_unified
+        _body = await generate_unified(ctx, matrix)
+        results = ([(Section(kind="key_findings", title="Анализ", focus="",
+                             audit_relevance=""), _body)] if _body else [])
+        log.warning("[narrative_renderer] SYNTH_UNIFIED: один синтез (%d симв.)", len(_body or ""))
 
-    log.warning("[narrative_renderer] outline = %s", [s.kind for s in sections])
-
-    # 2) Параллельная генерация секций
-    core_attr_names = [a.name for a in (core_schema or [])]
-    gen_tasks = []
-    for sec in sections:
-        gen = SECTION_GENERATORS.get(sec.kind)
-        if gen is None and sec.kind != "comparison_table" and sec.kind != "conflicts_explained":
-            log.warning("[narrative_renderer] no generator for %s", sec.kind)
-            gen_tasks.append((sec, None))
-            continue
-        gen_tasks.append((sec, gen))
-
-    async def _run_section(sec: Section, gen_fn) -> tuple[Section, str]:
-        # comparison_table — детерминированно из matrix
-        if sec.kind == "comparison_table":
-            return sec, _comparison_table_md(matrix)
-        # conflicts_explained — отдельная сигнатура
-        if sec.kind == "conflicts_explained":
-            if not matrix.conflicts:
-                return sec, ""
-            md = await conflict_explainer.generate(ctx, matrix.conflicts)
-            return sec, md
-        if gen_fn is None:
-            return sec, ""
-        # risks_recommendations — особый kwarg
+    if results is None:
+        # ── LEGACY: 9 генераторов + outline_planner (SYNTH_UNIFIED=0) ──
+        # 1) Outline planning
+        # Если topic_profile определил applicable_section_kinds — используем как hint
+        suggested_kinds = (topic_profile.applicable_section_kinds
+                             if topic_profile else None)
         try:
-            if sec.kind == "risks_recommendations":
-                gaps = matrix.null_cells()
-                md = await gen_fn(ctx, gaps=gaps, conflicts=matrix.conflicts)
-            elif sec.kind == "per_entity_breakdown":
-                md = await gen_fn(ctx, core_attrs=core_attr_names)
-            else:
-                md = await gen_fn(ctx)
+            sections = await plan_sections(
+                client, question,
+                core_schema or [],
+                facts,
+                has_regulatory_sources=has_regulatory,
+                suggested_kinds=suggested_kinds,
+            )
         except Exception as e:
-            log.warning("[narrative_renderer] section %s failed: %s", sec.kind, e)
-            md = ""
-        return sec, md
+            log.warning("[narrative_renderer] outline failed: %s — minimal fallback", e)
+            from .outline_planner import _default_outline
+            sections = _default_outline(facts)
+            # Если есть suggested_kinds — добавляем недостающие
+            if suggested_kinds:
+                existing = {s.kind for s in sections}
+                for kind in suggested_kinds:
+                    if kind not in existing and kind in SECTION_GENERATORS:
+                        sections.append(Section(
+                            kind=kind, title=kind.replace("_", " ").capitalize(),
+                            focus="", audit_relevance="",
+                        ))
 
-    results = await asyncio.gather(*[_run_section(s, g) for s, g in gen_tasks],
-                                       return_exceptions=False)
+        log.warning("[narrative_renderer] outline = %s", [s.kind for s in sections])
 
-    # 2.5) КРИТИК/REPAIR (#5): reasoning-вызов проверяет черновик секций —
-    # отвечает ли на вопрос, есть ли «почему/что значит», нет ли голословных
-    # выводов и повторов. При проблемах — перегенерация key_findings с критикой.
-    try:
-        results = await _critique_and_repair(ctx, results, question)
-    except Exception as e:
-        log.warning("[narrative_renderer] critic/repair failed: %s", e)
+        # 2) Параллельная генерация секций
+        core_attr_names = [a.name for a in (core_schema or [])]
+        gen_tasks = []
+        for sec in sections:
+            gen = SECTION_GENERATORS.get(sec.kind)
+            if gen is None and sec.kind != "comparison_table" and sec.kind != "conflicts_explained":
+                log.warning("[narrative_renderer] no generator for %s", sec.kind)
+                gen_tasks.append((sec, None))
+                continue
+            gen_tasks.append((sec, gen))
+
+        async def _run_section(sec: Section, gen_fn) -> tuple[Section, str]:
+            # comparison_table — детерминированно из matrix
+            if sec.kind == "comparison_table":
+                return sec, _comparison_table_md(matrix)
+            # conflicts_explained — отдельная сигнатура
+            if sec.kind == "conflicts_explained":
+                if not matrix.conflicts:
+                    return sec, ""
+                md = await conflict_explainer.generate(ctx, matrix.conflicts)
+                return sec, md
+            if gen_fn is None:
+                return sec, ""
+            # risks_recommendations — особый kwarg
+            try:
+                if sec.kind == "risks_recommendations":
+                    gaps = matrix.null_cells()
+                    md = await gen_fn(ctx, gaps=gaps, conflicts=matrix.conflicts)
+                elif sec.kind == "per_entity_breakdown":
+                    md = await gen_fn(ctx, core_attrs=core_attr_names)
+                else:
+                    md = await gen_fn(ctx)
+            except Exception as e:
+                log.warning("[narrative_renderer] section %s failed: %s", sec.kind, e)
+                md = ""
+            return sec, md
+
+        results = await asyncio.gather(*[_run_section(s, g) for s, g in gen_tasks],
+                                           return_exceptions=False)
+
+        # 2.5) КРИТИК/REPAIR (#5): reasoning-вызов проверяет черновик секций —
+        # отвечает ли на вопрос, есть ли «почему/что значит», нет ли голословных
+        # выводов и повторов. При проблемах — перегенерация key_findings с критикой.
+        try:
+            results = await _critique_and_repair(ctx, results, question)
+        except Exception as e:
+            log.warning("[narrative_renderer] critic/repair failed: %s", e)
 
     # 3) Сборка финального markdown.
     # Если preview уже отдан оркестратором (ранняя таблица) — НЕ дублируем
@@ -445,6 +577,17 @@ async def render_narrative_report(
             f"покрытие core-схемы **{cov_pct}%**._"
         )
         parts.append("")
+
+    # «Что не удалось определить» — пробелы как видимый артефакт рядом с таблицей,
+    # а не закопанные в прозу (объединяет core-пробелы + critical_gaps из brief).
+    try:
+        brief_gaps = list(getattr(brief, "critical_gaps", []) or []) if brief else []
+        gaps_block = _gaps_md(matrix, core_schema, brief_gaps)
+        if gaps_block:
+            parts.append(gaps_block)
+            parts.append("")
+    except Exception as e:
+        log.warning("[narrative_renderer] gaps block failed: %s", e)
 
     # ВЕРИФИКАЦИЯ НПА (#7): помечаем номера ФЗ/постановлений, которых нет в
     # источниках/фактах (регуляторные секции склонны выдумывать «ФЗ-102 о банках»).
@@ -497,15 +640,43 @@ def extract_chart_specs(matrix: Matrix, max_charts: int = 3) -> list[dict]:
     if not matrix.entities or len(matrix.entities) < 2:
         return []
 
+    def _unit_class(u: str) -> str:
+        """Грубый класс единицы для сопоставимости на одной оси.
+        ₽/мес и ₽/год — РАЗНЫЕ классы (нельзя на одну ось). % — отдельно."""
+        u = (u or "").lower().strip()
+        if not u:
+            return ""
+        if "%" in u:
+            return "pct"
+        per = ""
+        if "мес" in u:
+            per = "/mo"
+        elif "год" in u or "лет" in u:
+            per = "/yr"
+        elif "дн" in u or "сут" in u:
+            per = "/day"
+        if "₽" in u or "руб" in u:
+            return "rub" + per
+        return u  # прочее как есть
+
     chartable = []
     for attr, var_score in matrix.variance:
         if var_score <= 0:
             continue
         numeric_cells = [matrix.cell(e.bank_slug, attr) for e in matrix.entities]
+        present = [c for c in numeric_cells if c is not None and c.value_numeric is not None]
         numeric_values = [(e.bank_name, c.value_numeric)
                             for e, c in zip(matrix.entities, numeric_cells)
                             if c is not None and c.value_numeric is not None]
         if len(numeric_values) < 2:
+            continue
+        # НЕ чартим атрибут с несовместимыми единицами (₽/мес ↔ ₽/год ↔ %):
+        # такой график вводит в заблуждение.
+        unit_classes = {_unit_class(getattr(c, "unit", "")) for c in present}
+        unit_classes.discard("")
+        if len(unit_classes) > 1:
+            log.info("[narrative_renderer] skip chart %s: несовместимые единицы %s",
+                      attr, unit_classes)
             continue
         chartable.append((attr, var_score))
 

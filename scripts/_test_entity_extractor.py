@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from bank_audit.research.entity_extractor import extract_entities
-from bank_audit.ai.deep_research import _patch_client_reasoning_effort
+from bank_audit.ai.llm_utils import _patch_client_reasoning_effort
 
 TESTS = [
     # (question, expected_min_entities, expected_banks_subset, expected_product_keyword)

@@ -6,7 +6,7 @@ load_dotenv()
 
 from bank_audit.research.entity_extractor import Entity
 from bank_audit.research.source_finder import find_gold_sources
-from bank_audit.ai.deep_research import _patch_client_reasoning_effort
+from bank_audit.ai.llm_utils import _patch_client_reasoning_effort
 
 ENTITIES = [
     Entity(bank_slug="sberbank", bank_name="Сбербанк", bank_domain="sberbank.ru",

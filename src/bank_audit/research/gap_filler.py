@@ -44,11 +44,17 @@ log = logging.getLogger(__name__)
 
 # Бюджет и пороги
 MAX_ITERATIONS         = 2
-MAX_QUERIES_TOTAL      = 10
+MAX_QUERIES_TOTAL      = 10      # базовый; реально масштабируется по числу банков
 MAX_QUERIES_PER_ITER   = 6
 MIN_COVERAGE_GAIN      = 0.05    # 5% — иначе stop
 MAX_URLS_PER_QUERY     = 2
 MAX_PARALLEL_FETCH     = 4
+
+
+def _query_budget(n_banks: int) -> int:
+    """Бюджет запросов масштабируется по числу банков — иначе при 4-6 банках
+    10 запросов на ВСЕХ означало, что отстающему банку доставались крохи."""
+    return max(MAX_QUERIES_TOTAL, n_banks * 4)
 
 
 def _humanize_attribute(attr_name: str, core_schema: list[CoreAttr]) -> str:
@@ -87,6 +93,14 @@ def _prioritize_gaps(matrix: Matrix, core_schema: list[CoreAttr],
                                    if matrix.cell(e.bank_slug, attr) is not None)
     n_banks = len(matrix.entities)
 
+    # Покрытие ПО БАНКАМ — чтобы поднять в приоритете пробелы ОТСТАЮЩИХ банков
+    # (раньше gap_filler добивал лидера, усиливая асимметрию). Банк ниже медианы
+    # получает буст, перебивающий штраф «у всех пусто».
+    bank_cov = {e.bank_slug: matrix.bank_coverage(e.bank_slug, list(core_names))
+                for e in matrix.entities}
+    cov_vals = sorted(bank_cov.values())
+    median_cov = cov_vals[len(cov_vals) // 2] if cov_vals else 0.0
+
     def _score(gap: tuple[str, str]) -> float:
         bank, attr = gap
         s = 0.0
@@ -98,7 +112,11 @@ def _prioritize_gaps(matrix: Matrix, core_schema: list[CoreAttr],
         if filled > 0 and filled < n_banks:
             s += 5.0   # «у других есть, у этого нет» — приоритет
         elif filled == 0:
-            s -= 3.0   # «у всех нет» — низкий приоритет (нет публичной инфы)
+            s -= 3.0   # «у всех нет» — ниже приоритет (нет публичной инфы)
+        # ОТСТАЮЩИЙ банк: его пробелы важнее (выравниваем симметрию), буст
+        # перебивает штраф filled==0 выше.
+        if bank_cov.get(bank, 1.0) < median_cov - 0.1:
+            s += 6.0
         return s
 
     nulls_sorted = sorted(nulls, key=lambda g: -_score(g))
@@ -243,21 +261,23 @@ async def fill_gaps(client: AsyncOpenAI,
     current_matrix = matrix
     # КРИТИЧНО: current_facts = старые + новые, иначе coverage считается неверно
     current_facts: list[Fact] = list(initial_facts or [])
+    # Бюджет масштабируется по числу банков (item 15) — отстающим тоже хватит.
+    query_budget = _query_budget(len(entities))
+    per_iter = max(MAX_QUERIES_PER_ITER, len(entities) * 2)
 
     for iteration in range(1, MAX_ITERATIONS + 1):
-        if queries_spent >= MAX_QUERIES_TOTAL:
+        if queries_spent >= query_budget:
             log.warning("[gap_filler] iter %s: budget exhausted (%s queries)",
                          iteration, queries_spent)
             break
 
-        gaps = _prioritize_gaps(current_matrix, core_schema,
-                                   max_n=MAX_QUERIES_PER_ITER)
+        gaps = _prioritize_gaps(current_matrix, core_schema, max_n=per_iter)
         if not gaps:
             log.warning("[gap_filler] iter %s: no gaps left", iteration)
             break
 
-        # Bag-limit: не более MAX_QUERIES_TOTAL - queries_spent
-        remaining = MAX_QUERIES_TOTAL - queries_spent
+        # Bag-limit: не более query_budget - queries_spent
+        remaining = query_budget - queries_spent
         gaps = gaps[:remaining]
 
         log.warning("[gap_filler] iter %s: %s targeted queries, %s queries left in budget",

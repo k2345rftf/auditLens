@@ -50,12 +50,60 @@ def _fmt_num(n: float, unit: str) -> str:
 
 
 def _aggregate_cell(base: Triple, group: list[Triple]) -> tuple[Triple, bool]:
-    """Если у клетки несколько числовых фактов одного (нормализованного) типа —
-    отображаем ДИАПАЗОН «min–max» вместо одного group[0] (чинит врущую таблицу:
-    сумма 300к→100к–8млн, срок 8мес→1–5 лет, ставка 20,9→20,9–34,6).
+    """Сводит несколько значений ОДНОГО атрибута одного банка в одну ячейку,
+    НЕ теряя информацию.
 
-    Возвращает (display_triple, is_range). is_range=True → клетку НЕ помечать
-    конфликтом (диапазон честно показывает разброс)."""
+    Три случая:
+      • ОДНО значение → как есть.
+      • СТУПЕНИ/РЕЖИМЫ (значения с РАЗНЫМИ условиями: база/промо/для зарплатных)
+        → отображаем опорное (base), а ВСЕ ступени кладём в `.members` для
+        явного рендера лесенки. НЕ диапазон, НЕ конфликт.
+      • ЧИСЛОВОЙ РАЗБРОС без различающих условий (одинаковый _cond_key) →
+        честный диапазон min–max, тоже с `.members`.
+
+    Раньше любые несколько значений схлопывались в min–max от group[0], теряя
+    промежуточные ступени, их условия и цитаты. Теперь ничего не теряется.
+    Возвращает (display_triple, is_range)."""
+    members = list(group)
+
+    def _with_members(disp: Triple, is_range: bool) -> tuple[Triple, bool]:
+        disp.members = members
+        disp.is_range = is_range
+        return disp, is_range
+
+    if len(group) < 2:
+        # Единичный срок в месяцах, кратный 12 → показываем в годах (96 мес → 8 лет)
+        u = (base.unit or "").lower()
+        if base.value_numeric is not None and "мес" in u:
+            m = base.value_numeric
+            if m >= 12 and abs(m / 12 - round(m / 12)) < 1e-9:
+                yrs = int(round(m / 12))
+                conv = Triple(
+                    entity_bank_slug=base.entity_bank_slug, attribute=base.attribute,
+                    value=str(yrs), unit="лет", value_numeric=float(yrs),
+                    source_idx=base.source_idx, source_url=base.source_url,
+                    excerpt=base.excerpt, confidence=base.confidence,
+                    conditions=base.conditions, qualifications=base.qualifications,
+                    exceptions=base.exceptions, category=base.category,
+                    audit_priority=base.audit_priority,
+                )
+                return conv, False
+        return base, False
+
+    # СТУПЕНИ: если у значений РАЗНЫЕ условия — это лесенка/режимы, не диапазон.
+    distinct_conds = {_cond_key(g) for g in group}
+    if len(distinct_conds) > 1:
+        # base уже самый приоритетный (group отсортирован по confidence в build).
+        return _with_members(base, False)
+
+    # ОДИНАКОВЫЕ условия, но РАЗНЫЕ источники и МАТЕРИАЛЬНО разные значения →
+    # это РАСХОЖДЕНИЕ источников (15% ↔ 20%), а НЕ диапазон. Не сглаживаем в
+    # «15–20», показываем опорное значение; build пометит клетку конфликтом.
+    distinct_urls = {g.source_url for g in group if g.source_url}
+    if len(distinct_urls) > 1 and _is_material_conflict(group):
+        return _with_members(base, False)
+
+    # Иначе — однородный числовой разброс из одного источника → честный диапазон.
     norm = []
     for g in group:
         if g.value_numeric is None:
@@ -63,35 +111,42 @@ def _aggregate_cell(base: Triple, group: list[Triple]) -> tuple[Triple, bool]:
         v, u = _norm_time(g.value_numeric, g.unit or "")
         norm.append((v, u))
     if len(norm) < 2:
-        # Единичный срок в месяцах, кратный 12 → показываем в годах (96 мес → 8 лет)
-        u = (base.unit or "").lower()
-        if base.value_numeric is not None and "мес" in u:
-            m = base.value_numeric
-            if m >= 12 and abs(m / 12 - round(m / 12)) < 1e-9:
-                yrs = int(round(m / 12))
-                return Triple(
-                    entity_bank_slug=base.entity_bank_slug, attribute=base.attribute,
-                    value=str(yrs), unit="лет", value_numeric=float(yrs),
-                    source_idx=base.source_idx, source_url=base.source_url,
-                    excerpt=base.excerpt, confidence=base.confidence,
-                ), False
-        return base, False
+        return _with_members(base, False)
     units = {u for _, u in norm}
     if len(units) != 1:                 # несовместимые единицы — не диапазон
-        return base, False
+        return _with_members(base, False)
     unit = next(iter(units))
     vals = [v for v, _ in norm]
     lo, hi = min(vals), max(vals)
-    if hi - lo < 1e-9:                   # все значения равны (напр. 5 лет == 60 мес)
-        return base, False
+    if hi - lo < 1e-9:                   # все значения равны
+        return _with_members(base, False)
     rng = f"{_fmt_num(lo, unit)}–{_fmt_num(hi, unit)}"
     disp = Triple(
         entity_bank_slug=base.entity_bank_slug, attribute=base.attribute,
         value=rng, unit=unit, value_numeric=(lo + hi) / 2,
         source_idx=base.source_idx, source_url=base.source_url,
         excerpt=base.excerpt, confidence=base.confidence,
+        conditions=base.conditions, qualifications=base.qualifications,
+        exceptions=base.exceptions, category=base.category,
+        audit_priority=base.audit_priority,
     )
-    return disp, True
+    return _with_members(disp, True)
+
+
+def _is_conflict(group: list[Triple]) -> bool:
+    """Конфликт = в пределах ОДНОГО режима (одинаковые условия) РАЗНЫЕ источники
+    дают МАТЕРИАЛЬНО разные значения (15% ↔ 20%). Разные условия (база/промо) —
+    НЕ конфликт, это легитимная лесенка. Разброс из ОДНОГО источника трактуем как
+    диапазон, а не противоречие (иначе любая «6–12%» помечалась бы конфликтом)."""
+    by_cond: dict[str, list[Triple]] = defaultdict(list)
+    for g in group:
+        by_cond[_cond_key(g)].append(g)
+    for _, gs in by_cond.items():
+        if len(gs) > 1 and _is_material_conflict(gs):
+            distinct_urls = {g.source_url for g in gs if g.source_url}
+            if len(distinct_urls) > 1:
+                return True
+    return False
 
 
 def _is_material_conflict(group) -> bool:
@@ -143,11 +198,12 @@ def _is_material_conflict(group) -> bool:
 
 
 def _fact_to_triple(f: Fact) -> Triple:
-    """Конвертер Fact → Triple для совместимости с матрицей.
+    """Конвертер Fact → Triple для ячейки матрицы.
 
-    Сохраняем основные поля. Богатый контекст (conditions/qualifications/
-    exceptions/verbatim_quote/category/audit_priority) теряется в матрице
-    но остаётся доступным через исходный список фактов в narrative-секциях.
+    КЛЮЧЕВАЯ ПРАВКА: больше НЕ теряем богатый контекст. conditions/
+    qualifications/exceptions/category/audit_priority зеркалятся на Triple, чтобы
+    сравнительная таблица и экспорт могли показать, ЧЕМ обусловлено значение
+    (условная ставка ≠ безусловная). Самое важное в сравнении банков сохраняется.
     """
     return Triple(
         entity_bank_slug=f.entity_bank_slug,
@@ -155,7 +211,19 @@ def _fact_to_triple(f: Fact) -> Triple:
         value=f.value, unit=f.unit, value_numeric=f.value_numeric,
         source_idx=f.source_idx, source_url=f.source_url,
         excerpt=f.verbatim_quote, confidence=f.confidence,
+        conditions=list(f.conditions or []),
+        qualifications=f.qualifications or "",
+        exceptions=list(f.exceptions or []),
+        category=f.category or "",
+        audit_priority=f.audit_priority or "medium",
     )
+
+
+def _cond_key(t: Triple) -> str:
+    """Ключ режима/ступени: нормализованные условия+сегмент. Разные условия =
+    разные ступени (база/промо/для зарплатных), НЕ конфликт источников."""
+    conds = "|".join(sorted(_norm_val(c) for c in (t.conditions or [])))
+    return conds + "##" + _norm_val(t.qualifications or "")
 
 
 @dataclass
@@ -169,6 +237,10 @@ class Matrix:
     variance:    list[tuple[str, float]] = field(default_factory=list)
     # Прокинуть source-map для рендера цитат
     sources:     list[dict] = field(default_factory=list)   # [{n, url, title, ...}]
+    # Банки, по которым НЕ найдено реальных данных (источник не прочитан/блок).
+    # Их пустые клетки рендерятся как «нет данных — источник не прочитан»,
+    # а НЕ «банк не предлагает». Это разные сигналы для аудитора.
+    insufficient_banks: set = field(default_factory=set)
 
     def cell(self, bank_slug: str, attribute: str) -> Triple | None:
         return self.cells.get((bank_slug, attribute))
@@ -177,6 +249,17 @@ class Matrix:
         """Список (bank, attr) пустых клеток — для gap-filler."""
         return [k for k, v in self.cells.items() if v is None]
 
+    def bank_coverage(self, bank_slug: str, core_attrs: list[str] | None = None) -> float:
+        """Покрытие по одному банку (доля заполненных core-атрибутов).
+
+        Нужно для пер-банковой симметрии: gap-filling и добор источников должны
+        запускаться по ОТСТАЮЩЕМУ банку, а не по среднему по матрице."""
+        attrs = [a for a in (core_attrs or self.attributes)] or self.attributes
+        if not attrs:
+            return 0.0
+        filled = sum(1 for a in attrs if self.cells.get((bank_slug, a)) is not None)
+        return filled / len(attrs)
+
 
 def _compute_variance(cells: dict[tuple[str, str], Triple | None],
                        attributes: list[str], banks: list[str]) -> list[tuple[str, float]]:
@@ -184,17 +267,22 @@ def _compute_variance(cells: dict[tuple[str, str], Triple | None],
     Полезный сигнал: атрибуты с высокой variance — главное содержание отчёта.
     Формула: для числовых — coefficient of variation, для строковых — кол-во разных значений.
     Возвращает [(attribute, variance_score)] отсортированный по убыванию."""
+    _AFFIRM = {"да", "есть", "true", "yes", "+", "доступно", "возможно", "нет",
+               "false", "no", "-", "недоступно"}
     out = []
     for attr in attributes:
         values = []
         for bank in banks:
             t = cells.get((bank, attr))
-            if t is None:
+            # Плейсхолдеры/«не найден» НЕ участвуют в variance — иначе «есть/нет/
+            # не найден» давали ложную variance=1.0 и тащили мусор в графики.
+            if not _is_real_cell(t):
                 continue
             if t.value_numeric is not None:
                 values.append(t.value_numeric)
             else:
-                values.append(t.value.lower().strip())
+                nv = _norm_val(t.value)
+                values.append("__affirm__" if nv in _AFFIRM else nv)
         if not values:
             out.append((attr, 0.0))
             continue
@@ -216,14 +304,26 @@ def _compute_variance(cells: dict[tuple[str, str], Triple | None],
     return out
 
 
+def _is_real_cell(t: Triple | None) -> bool:
+    """Клетка несёт реальные данные (не плейсхолдер «не найден», не data_missing)."""
+    if t is None or getattr(t, "data_missing", False):
+        return False
+    v = (t.value or "").lower()
+    if "не найден" in v or "не найдены источ" in v:
+        return False
+    return True
+
+
 def build_matrix(entities: list[Entity],
                    triples: list[Triple] | list[Fact],
                    sources_index: list[dict] | None = None,
-                   core_attrs: list[str] | None = None) -> Matrix:
+                   core_attrs: list[str] | None = None,
+                   insufficient_banks: set | None = None) -> Matrix:
     """Собирает матрицу.
 
-    triples         — Triple ИЛИ Fact (автоматически конвертирует Fact→Triple)
-    sources_index   — глобальный список источников с n-маркерами
+    triples            — Triple ИЛИ Fact (автоматически конвертирует Fact→Triple)
+    sources_index      — глобальный список источников с n-маркерами
+    insufficient_banks — банки без реальных данных (пустые клетки → «нет данных»)
     """
     # Backward compat: если передали Fact[] — конвертируем в Triple[]
     if triples and isinstance(triples[0], Fact):
@@ -234,6 +334,13 @@ def build_matrix(entities: list[Entity],
     attrs_seen: dict[str, int] = defaultdict(int)
     for t in triples:
         attrs_seen[t.attribute] += 1
+    # ВСЕ core-атрибуты — колонки таблицы, ДАЖЕ полностью пустые. Иначе атрибут,
+    # которого нет ни у одного банка, был невидим в таблице И выпадал из
+    # знаменателя покрытия (завышая coverage). Теперь «срок: ⚠ Не раскрыто»
+    # честно виден, а покрытие считается по полному core.
+    for a in (core_attrs or []):
+        if a not in attrs_seen:
+            attrs_seen[a] = 0
     # Сортируем атрибуты: 1) core_attrs всегда первыми (в порядке их priority)
     # 2) затем частые в нескольких банках 3) затем алфавит.
     core_set = set(core_attrs or [])
@@ -264,18 +371,18 @@ def build_matrix(entities: list[Entity],
     for key, group in grouped.items():
         if not group:
             continue
-        group.sort(key=lambda x: -_CONF_RANK.get(x.confidence, 1))
-        # Multi-value: несколько числовых фактов → ДИАПАЗОН вместо одного значения.
+        # Опорное значение: высший confidence, при равенстве — high audit_priority.
+        _PRIO = {"high": 2, "medium": 1, "low": 0}
+        group.sort(key=lambda x: (-_CONF_RANK.get(x.confidence, 1),
+                                    -_PRIO.get(x.audit_priority, 1)))
+        # Multi-value: ступени/режимы → лесенка в .members; разброс → диапазон.
         display, is_range = _aggregate_cell(group[0], group)
         cells[key] = display
-        if len(group) > 1 and not is_range:
-            # Конфликт ТОЛЬКО если значения МАТЕРИАЛЬНО различаются и из РАЗНЫХ
-            # источников. Диапазон (is_range) — НЕ конфликт: он честно показывает
-            # разброс (ставка 6,5–12,5 %), а не противоречие источников.
-            # Отсекаем шум: «до 12.5%»↔«12.5%», «5 лет»↔«60 мес» (то же число).
-            distinct_urls = {g.source_url for g in group}
-            if len(distinct_urls) > 1 and _is_material_conflict(group):
-                conflicts[key] = group
+        # Конфликт = в пределах ОДНОГО режима источники материально расходятся.
+        # Лесенка (разные условия) и диапазон — НЕ конфликт. Требование «разные
+        # URL» снято: источник может противоречить сам себе (item 40).
+        if len(group) > 1 and not is_range and _is_conflict(group):
+            conflicts[key] = group
 
     # Coverage — ЧЕСТНАЯ метрика по CORE-атрибутам.
     # Периферийные атрибуты, найденные gap_filler'ом (карта-стикер, бонусы),
@@ -285,8 +392,9 @@ def build_matrix(entities: list[Entity],
     if not cov_attrs:
         cov_attrs = list(attributes)
     total = len(banks) * len(cov_attrs)
+    # ЧЕСТНО: плейсхолдеры «не найден»/data_missing НЕ считаются заполненными.
     filled = sum(1 for b in banks for a in cov_attrs
-                  if cells.get((b, a)) is not None)
+                  if _is_real_cell(cells.get((b, a))))
     coverage = (filled / total) if total > 0 else 0.0
 
     # Variance
@@ -303,6 +411,7 @@ def build_matrix(entities: list[Entity],
         coverage=coverage,
         variance=variance,
         sources=sources_index or [],
+        insufficient_banks=set(insufficient_banks or set()),
     )
     # Сохраняем список core attributes для renderer'а (главная таблица показывает их)
     setattr(matrix, "core_attrs", list(core_attrs or []))

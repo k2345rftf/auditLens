@@ -20,14 +20,14 @@ from typing import AsyncIterator
 from openai import AsyncOpenAI
 
 from ..ai.analyst import LLM_BASE_URL, LLM_API_KEY
-from ..ai.deep_research import (
+from ..ai.llm_utils import (
     _patch_client_reasoning_effort,
     _format_llm_error,
     normalize_question,
 )
 from .entity_extractor import Entity, extract_entities
 from .source_finder import GoldSource, find_gold_sources, find_gold_sources_extended
-from .triple_extractor import Triple, extract_triples
+from .triple_extractor import Triple
 from .fact import Fact
 from .fact_extractor import extract_facts
 from .schema_normalizer import normalize_schema, apply_normalization
@@ -41,7 +41,6 @@ from .topic_classifier import classify_topic, TopicProfile
 from .regulatory_source_finder import find_regulatory_sources
 from .llm_throttle import patch_client_throttle
 from .gap_filler import fill_gaps
-from .audit_focus_filter import filter_for_narrative
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +50,114 @@ def _trust_marker(score: float) -> int:
     if score >= 0.9: return 2
     if score >= 0.6: return 1
     return 0
+
+
+def _verify_facts_against_sources(facts: list, sources_index: list[dict]) -> dict:
+    """РЕАЛЬНАЯ (не фейковая) сверка фактов с текстом источников.
+
+    Для каждого числового факта проверяем, что его значение действительно
+    присутствует в дословной цитате/выдержке цитируемого источника. Это
+    детерминированная проверка (без LLM), даёт ЧЕСТНЫЕ verified/unverified/samples
+    вместо прежнего хардкода dropped:0. Текстовые факты (без числа) не сверяем —
+    помечаем как unchecked, не раздуваем «verified»."""
+    import re as _re
+    src_text_by_n: dict[int, str] = {}
+    for s in sources_index:
+        n = s.get("n")
+        if n is None:
+            continue
+        txt = " ".join(s.get("excerpts") or [])
+        src_text_by_n[n] = (txt + " " + (s.get("title") or "")).lower()
+
+    def _nums(t: str) -> set:
+        out = set()
+        for m in _re.finditer(r"\d[\d  .,]*\d|\d", t or ""):
+            raw = _re.sub(r"[  .,]", "", m.group(0))
+            if raw.isdigit():
+                out.add(raw)
+        return out
+
+    verified = 0
+    numeric_checked = 0
+    unverified_samples: list[dict] = []
+    for f in facts:
+        if getattr(f, "value_numeric", None) is None:
+            continue   # нечисловой факт — не сверяем числом
+        numeric_checked += 1
+        idx = getattr(f, "source_idx", 0)
+        haystack = (src_text_by_n.get(idx, "") + " "
+                    + (getattr(f, "verbatim_quote", "") or "")).lower()
+        target = _re.sub(r"[  .,]", "", str(getattr(f, "value", "")))
+        target_digits = "".join(ch for ch in target if ch.isdigit())
+        hit = bool(target_digits) and target_digits in _nums(haystack)
+        if hit:
+            verified += 1
+        elif len(unverified_samples) < 8:
+            unverified_samples.append({
+                "bank": getattr(f, "entity_bank_slug", ""),
+                "attribute": getattr(f, "attribute", ""),
+                "value": f"{getattr(f, 'value', '')} {getattr(f, 'unit', '')}".strip(),
+                "source_idx": idx,
+            })
+    return {
+        "numeric_checked": numeric_checked,
+        "verified": verified,
+        "unverified": max(0, numeric_checked - verified),
+        "samples": unverified_samples,
+    }
+
+
+def _serialize_matrix(matrix, core_schema) -> dict:
+    """Полная матрица в JSON-вид для машиночитаемого экспорта (CSV/JSON) —
+    со ВСЕМ контекстом каждой клетки (значение, единица, условия, сегмент,
+    исключения, цитата, confidence, ступени). Это и есть «полная картина без
+    воды» для самостоятельной сверки аудитором."""
+    core_names = [a.name for a in (core_schema or [])]
+    insuff = getattr(matrix, "insufficient_banks", set()) or set()
+    rows = []
+    for attr in matrix.attributes:
+        cells = []
+        for e in matrix.entities:
+            t = matrix.cell(e.bank_slug, attr)
+            if t is None:
+                cells.append({
+                    "bank": e.bank_slug,
+                    "state": "no_data" if e.bank_slug in insuff else "not_disclosed",
+                    "value": "", "unit": "",
+                })
+                continue
+            members = []
+            for m in (getattr(t, "members", None) or []):
+                if len(getattr(t, "members", [])) > 1:
+                    members.append({
+                        "value": m.value, "unit": m.unit,
+                        "conditions": list(getattr(m, "conditions", []) or []),
+                        "qualifications": getattr(m, "qualifications", "") or "",
+                        "source_idx": getattr(m, "source_idx", 0),
+                    })
+            cells.append({
+                "bank": e.bank_slug,
+                "state": "ok",
+                "value": t.value, "unit": t.unit,
+                "value_numeric": t.value_numeric,
+                "conditions": list(getattr(t, "conditions", []) or []),
+                "qualifications": getattr(t, "qualifications", "") or "",
+                "exceptions": list(getattr(t, "exceptions", []) or []),
+                "source_idx": t.source_idx,
+                "confidence": t.confidence,
+                "is_range": getattr(t, "is_range", False),
+                "ladder": members,
+                "conflict": (e.bank_slug, attr) in (matrix.conflicts or {}),
+            })
+        rows.append({"attribute": attr, "is_core": attr in core_names, "cells": cells})
+    return {
+        "banks": [{"slug": e.bank_slug, "name": e.bank_name} for e in matrix.entities],
+        "attributes": list(matrix.attributes),
+        "core_attributes": core_names,
+        "coverage": matrix.coverage,
+        "insufficient_banks": sorted(insuff),
+        "rows": rows,
+    }
 
 
 def _build_sources_index(entities: list[Entity],
@@ -141,29 +248,6 @@ def _remap_fact_indices(facts: list[Fact],
             source_idx=global_n,
             source_url=f.source_url,
             confidence=f.confidence,
-        ))
-    return out
-
-
-def _remap_triple_indices(triples: list[Triple],
-                          sources_per_entity: dict[str, list[GoldSource]],
-                          sources_index: list[dict]) -> list[Triple]:
-    """Backward-compat alias для старого кода. Использует Fact-внутренности
-    если получили Fact, иначе Triple."""
-    if triples and isinstance(triples[0], Fact):
-        return _remap_fact_indices(triples, sources_index)
-    url_to_n = {s["url"]: s["n"] for s in sources_index}
-    out = []
-    for t in triples:
-        global_n = url_to_n.get(t.source_url, 0)
-        out.append(Triple(
-            entity_bank_slug=t.entity_bank_slug,
-            attribute=t.attribute,
-            value=t.value, unit=t.unit,
-            value_numeric=t.value_numeric,
-            source_idx=global_n,
-            source_url=t.source_url,
-            excerpt=t.excerpt, confidence=t.confidence,
         ))
     return out
 
@@ -277,6 +361,11 @@ async def stream_eav_research(question: str,
         log.warning("[orchestrator] core_schema discovery failed: %s", e)
         core_schema = []
     extract_hint = build_extract_hint(core_schema) if core_schema else ""
+    # Контракт slot_id (этап 3): extractor кладёт факты в закрытый список слотов,
+    # matrix джойнит по этому enum → нет рассинхрона имён → нет «пустой таблицы».
+    # При SLOT_SCHEMA=1 schema_normalizer не нужен (имена уже = slot_id).
+    SLOT_SCHEMA = os.getenv("SLOT_SCHEMA", "1").lower() in ("1", "true", "yes")
+    slot_id_set = {a.name for a in core_schema} if (SLOT_SCHEMA and core_schema) else None
 
     # ── Stage 2: Source discovery (PARALLEL + REGULATORY) ────────────────
     yield evt({"type": "phase", "value": "discovery"})
@@ -343,9 +432,24 @@ async def stream_eav_research(question: str,
     low  = sum(1 for s in sources_index if s.get("trust_score", 0) < 0.55)
     n_pdf = sum(1 for s in sources_index if s.get("url", "").lower().endswith(".pdf"))
     n_reg = len(regulatory_sources)
+    # Пер-банковый паритет источников (item 44): считаем источники по банкам и
+    # предупреждаем, если у какого-то их СУЩЕСТВЕННО меньше, чем у остальных
+    # (сравнение тогда структурно перекошено — отстающим займётся gap_filler).
+    src_per_bank = {e.bank_slug: len(sources_per_entity.get(e.bank_slug, []))
+                    for e in entities}
+    counts = sorted(src_per_bank.values())
+    median_src = counts[len(counts) // 2] if counts else 0
+    lagging = [next(e.bank_name for e in entities if e.bank_slug == slug)
+               for slug, c in src_per_bank.items()
+               if c < max(2, 0.5 * median_src)]
+    parity_warn = (f"Неравномерный охват источников: меньше всего по "
+                   f"{', '.join(lagging)} — сравнение по ним менее полно"
+                   if lagging and len(lagging) < len(entities) else None)
     yield evt({"type": "coverage", "total_sources": total_sources,
                 "high_trust": high, "mid_trust": mid, "low_trust": low,
                 "pdf_sources": n_pdf, "regulatory_sources": n_reg,
+                "sources_per_bank": src_per_bank,
+                "parity_warning": parity_warn,
                 "warning": "Мало источников — отчёт ограничен" if total_sources < 3 else None})
 
     if total_sources == 0:
@@ -375,19 +479,33 @@ async def stream_eav_research(question: str,
                     "title": f"Извлечение фактов — {e.bank_name}",
                     "tool": "fact_extractor", "entity": e.bank_slug})
 
+    def _merge_sources(primary: list[GoldSource], extra: list[GoldSource]) -> list[GoldSource]:
+        """Объединяет наборы источников по URL (без перезаписи). Восстановленный
+        банк должен достигать ТОЙ ЖЕ глубины, что и остальные, а не остаться с
+        3 тонкими источниками (item 17)."""
+        seen = {s.url for s in primary}
+        out = list(primary)
+        for s in extra:
+            if s.url not in seen:
+                seen.add(s.url)
+                out.append(s)
+        return out
+
     async def extract_one(e: Entity) -> tuple[Entity, list[Fact]]:
         """Extract с двойной попыткой: если 0 facts — переформулируем product
-        на более общий синоним и пробуем повторный source_finder + extract."""
+        на более общий синоним и пробуем повторный source_finder + extract.
+        Второй заход идёт на ПОЛНОЙ глубине (top_n≈8) и МЁРДЖИТ источники."""
         srcs = sources_per_entity.get(e.bank_slug, [])
         facts: list[Fact] = []
         if srcs:
             try:
                 facts = await extract_facts(client, e, srcs,
-                                              core_schema_hint=extract_hint)
+                                              core_schema_hint=extract_hint,
+                                              slot_ids=slot_id_set)
             except Exception as ex:
                 log.warning("extract_facts failed for %s: %s", e.bank_slug, ex)
 
-        # SECOND CHANCE при 0 facts
+        # SECOND CHANCE при 0 facts — полная глубина + мёрдж источников
         if not facts and e.product_synonyms:
             general_syn = sorted(e.product_synonyms,
                                   key=lambda s: (s.lower() == e.product.lower(), len(s)))
@@ -400,15 +518,21 @@ async def stream_eav_research(question: str,
                     product_synonyms=e.product_synonyms,
                     audience=e.audience,
                 )
-                log.warning("[orchestrator] %s: 0 facts → retry product=%r",
+                log.warning("[orchestrator] %s: 0 facts → retry product=%r (top_n=8)",
                              e.bank_slug, alt_product)
                 try:
-                    alt_srcs = await find_gold_sources(client, alt_e, top_n=3)
+                    try:
+                        alt_srcs = await find_gold_sources_extended(
+                            client, alt_e, core_schema=core_schema, top_n=8)
+                    except Exception:
+                        alt_srcs = await find_gold_sources(client, alt_e, top_n=8)
                     if alt_srcs:
-                        sources_per_entity[e.bank_slug] = alt_srcs
-                        srcs = alt_srcs
-                        facts = await extract_facts(client, alt_e, alt_srcs,
-                                                       core_schema_hint=extract_hint)
+                        merged = _merge_sources(srcs, alt_srcs)
+                        sources_per_entity[e.bank_slug] = merged
+                        srcs = merged
+                        facts = await extract_facts(client, alt_e, merged,
+                                                       core_schema_hint=extract_hint,
+                                                       slot_ids=slot_id_set)
                         if facts:
                             for f in facts:
                                 f.entity_bank_slug = e.bank_slug
@@ -417,33 +541,23 @@ async def stream_eav_research(question: str,
                     log.info("retry failed for %s with %r: %s",
                               e.bank_slug, alt_product, ex)
 
-        # Honest fallback если 0 facts
-        if not facts:
-            facts = [Fact(
-                entity_bank_slug=e.bank_slug,
-                attribute="продукт_доступен",
-                value="не найден в открытых источниках" if srcs else "не найдены источники",
-                unit="", value_numeric=None,
-                verbatim_quote="Возможно банк не предлагает специальный продукт или информация не публикуется",
-                category="feature", audit_priority="high",
-                source_idx=1 if srcs else 0,
-                source_url=srcs[0].url if srcs else "",
-                confidence="low",
-            )]
+        # БОЛЬШЕ НЕ инжектим placeholder-факт «продукт_доступен» в данные.
+        # 0 фактов → банк помечается insufficient (см. ниже), его пустые клетки
+        # рендерятся как «нет данных — источник не прочитан», а НЕ как факт.
         return e, facts
 
     fact_results = await asyncio.gather(
         *[extract_one(e) for e in entities], return_exceptions=False)
     all_facts: list[Fact] = []
+    insufficient_banks: set[str] = set()
     for i, (e, facts) in enumerate(fact_results):
         all_facts.extend(facts)
+        if not facts:
+            insufficient_banks.add(e.bank_slug)
         n_high = sum(1 for f in facts if f.audit_priority == "high")
-        # Reg sources также экстрагируются если есть (под synthetic entity)
-        # — это даст наполнение для regulatory_box секции.
-        # ↓ Это происходит ниже, отдельным шагом, чтобы не блокировать per-entity.
         yield evt({"type": "step_done", "n": fact_step_start_n + i,
                     "found": len(facts), "used": len(facts),
-                    "detail": f"{n_high} priority-high"})
+                    "detail": f"{n_high} priority-high" if facts else "нет данных (источник не прочитан)"})
 
     # ── Stage 3.5: Extract из regulatory sources (если есть) ─────────────
     # Создаём synthetic entity «Регулятор» для extract из НПА-документов.
@@ -485,19 +599,42 @@ async def stream_eav_research(question: str,
             log.warning("[orchestrator] regulatory extract failed: %s", e)
 
     # ── Stage 4: Schema normalization ────────────────────────────────────
-    yield evt({"type": "stage_status", "stage": "schema_normalization",
-                "label": "Сведение синонимичных полей",
-                "detail": f"Из {len(all_facts)} фактов",
-                "estimate_s": 8})
-    yield evt({"type": "step_start", "n": fact_step_start_n + len(entities),
-                "title": "Нормализация схемы атрибутов",
-                "tool": "schema_normalizer", "entity": None})
-    try:
-        mapping = await normalize_schema(client, all_facts)
-        normalized_facts = apply_normalization(all_facts, mapping)
-    except Exception as e:
-        log.warning("schema_normalize failed: %s", e)
-        normalized_facts = all_facts
+    # При SLOT_SCHEMA (контракт slot_id) имена фактов УЖЕ канонические (= slot_id),
+    # отдельный LLM-вызов-нормализатор не нужен — это была точка отказа «пустой
+    # таблицы». Нормализуем только в legacy-режиме (SLOT_SCHEMA=0) или если
+    # core-схема пуста (тогда имена свободные).
+    mapping: dict = {}
+    if slot_id_set:
+        normalized_facts = all_facts   # имена = slot_id, нормализация не требуется
+        log.warning("[orchestrator] SLOT_SCHEMA on → schema_normalizer пропущен "
+                     "(имена фактов = slot_id)")
+    else:
+        yield evt({"type": "stage_status", "stage": "schema_normalization",
+                    "label": "Сведение синонимичных полей",
+                    "detail": f"Из {len(all_facts)} фактов", "estimate_s": 8})
+        yield evt({"type": "step_start", "n": fact_step_start_n + len(entities),
+                    "title": "Нормализация схемы атрибутов",
+                    "tool": "schema_normalizer", "entity": None})
+        core_attr_names_pre = [a.name for a in core_schema]
+        try:
+            mapping = await normalize_schema(client, all_facts,
+                                              core_attrs=core_attr_names_pre)
+            normalized_facts = apply_normalization(all_facts, mapping)
+        except Exception as e:
+            log.warning("schema_normalize failed: %s", e)
+            normalized_facts = all_facts
+
+    # АВАРИЙНЫЙ core: если LLM-discovery вернул пусто, выводим core-схему из
+    # самих фактов (иначе таблица и знаменатель покрытия пустые).
+    if not core_schema and normalized_facts:
+        try:
+            from .core_schema import derive_core_from_facts
+            core_schema = derive_core_from_facts(normalized_facts)
+            extract_hint = build_extract_hint(core_schema) if core_schema else extract_hint
+            log.warning("[orchestrator] core_schema пуст → derive из фактов: %s attrs",
+                         len(core_schema))
+        except Exception as e:
+            log.warning("[orchestrator] derive_core_from_facts failed: %s", e)
 
     yield evt({"type": "step_done", "n": fact_step_start_n + len(entities),
                 "found": len(set(f.attribute for f in normalized_facts)),
@@ -509,20 +646,41 @@ async def stream_eav_research(question: str,
     # ── Stage 5: Matrix build ────────────────────────────────────────────
     core_attr_names = [a.name for a in core_schema]
     matrix = build_matrix(entities, normalized_facts, sources_index,
-                           core_attrs=core_attr_names)
+                           core_attrs=core_attr_names,
+                           insufficient_banks=insufficient_banks)
     initial_coverage = matrix.coverage
 
-    # ── Stage 5.5: Gap-filling (Phase 2 — закрывает пустые клетки) ───────
-    if core_schema and matrix.coverage < 0.85:
+    # ── Stage 5.5: Gap-filling — ПО-БАНКОВЫЙ триггер, не глобальный 0.85 ──
+    # Раньше gap_filler запускался только при средней coverage<0.85, поэтому
+    # «95% по А + 20% по Б» (среднее >0.85) пропускал добор и оставлял банк Б
+    # дырявым. Теперь триггерим, если ЛЮБОЙ банк ниже порога ИЛИ заметно ниже
+    # лидера (асимметрия) ИЛИ есть пустые high-priority core-клетки.
+    def _needs_gap_fill(m) -> bool:
+        if not core_schema:
+            return False
+        per_bank = {e.bank_slug: m.bank_coverage(e.bank_slug, core_attr_names)
+                    for e in entities}
+        if not per_bank:
+            return m.coverage < 0.85
+        best = max(per_bank.values())
+        for slug, cov in per_bank.items():
+            if cov < 0.7:               # абсолютный пол по банку
+                return True
+            if best - cov > 0.25:        # асимметрия относительно лидера
+                return True
+        return m.coverage < 0.85
+
+    if _needs_gap_fill(matrix):
         yield evt({"type": "stage_status", "stage": "gap_filling",
                     "label": "Заполнение пробелов (targeted web search)",
-                    "detail": f"Coverage {round(matrix.coverage * 100)}% → "
-                                "пытаемся повысить",
+                    "detail": f"Coverage {round(matrix.coverage * 100)}% / "
+                                "выравниваем отстающие банки",
                     "estimate_s": 30})
         try:
             gap_facts, _ = await fill_gaps(
                 client, matrix, entities, core_schema, sources_index,
-                build_matrix_fn=lambda e, f, s, c: build_matrix(e, f, s, core_attrs=c),
+                build_matrix_fn=lambda e, f, s, c: build_matrix(
+                    e, f, s, core_attrs=c, insufficient_banks=insufficient_banks),
                 initial_facts=normalized_facts,
             )
         except Exception as e:
@@ -536,25 +694,31 @@ async def stream_eav_research(question: str,
             except Exception as e:
                 log.warning("apply_normalization for gap_facts failed: %s", e)
             normalized_facts = normalized_facts + gap_facts
+            # банк, по которому добор дал факты, больше не «insufficient»
+            insufficient_banks -= {getattr(f, "entity_bank_slug", "") for f in gap_facts}
             # Re-build матрицы
             matrix = build_matrix(entities, normalized_facts, sources_index,
-                                    core_attrs=core_attr_names)
+                                    core_attrs=core_attr_names,
+                                    insufficient_banks=insufficient_banks)
             log.warning("[orchestrator] after gap_filler: %s facts (+%s), "
                           "coverage %.0f%% (+%.0f%%)",
                           len(normalized_facts), len(gap_facts),
                           matrix.coverage * 100,
                           (matrix.coverage - initial_coverage) * 100)
 
-    # Verification event (что было верифицировано)
+    # ── РЕАЛЬНАЯ верификация (не театр): сверяем числа фактов с источниками ──
+    vres = _verify_facts_against_sources(normalized_facts, sources_index)
     yield evt({"type": "verification",
-                "verified": sum(1 for f in normalized_facts if f.confidence == "high"),
-                "unverified": [],
+                "method": "numeric_grounding",   # честный ярлык метода
+                "numeric_checked": vres["numeric_checked"],
+                "verified": vres["verified"],
+                "unverified": vres["unverified"],
                 "valid_citations": sorted({f.source_idx for f in normalized_facts if f.source_idx}),
-                "checked": True})
+                "checked": vres["numeric_checked"] > 0})
     yield evt({"type": "claim_check",
-                "verified": len(normalized_facts),
-                "dropped": 0,
-                "samples": []})
+                "verified": vres["verified"],
+                "dropped": vres["unverified"],
+                "samples": vres["samples"]})
 
     # ── Stage 5.7: РАННЯЯ ОТДАЧА таблицы (perceived latency) ─────────────
     # Самый ценный артефакт — сравнительная таблица + графики — готов сразу после
@@ -574,6 +738,8 @@ async def stream_eav_research(question: str,
             f"всего **{n_facts}** фактов извлечено ({n_high} приоритет high), "
             f"покрытие core-схемы **{cov_pct}%**._\n\n")})
         yield evt({"type": "text", "chunk": _comparison_table_md(matrix) + "\n\n"})
+        # Полная матрица (машиночитаемо) — для кнопки «Скачать CSV/JSON».
+        yield evt({"type": "matrix", "data": _serialize_matrix(matrix, core_schema)})
         early_charts = extract_chart_specs(matrix)
         for ch in early_charts:
             yield evt({"type": "chart", "spec": ch})
@@ -584,6 +750,20 @@ async def stream_eav_research(question: str,
                     "detail": "Выводы и нарратив формируются…", "estimate_s": 0})
     except Exception as e:
         log.warning("[orchestrator] ранняя отдача таблицы не удалась: %s", e)
+
+    # Структурный список пробелов (item 41) — first-class сигнал для UI/алертов.
+    try:
+        gap_items = []
+        for a in core_attr_names:
+            miss = [e.bank_name for e in entities if matrix.cell(e.bank_slug, a) is None]
+            if miss:
+                gap_items.append({"attribute": a, "missing_banks": miss,
+                                   "all": len(miss) == len(entities)})
+        yield evt({"type": "gaps",
+                    "insufficient_banks": sorted(insufficient_banks),
+                    "missing": gap_items})
+    except Exception as e:
+        log.warning("[orchestrator] gaps event failed: %s", e)
 
     # ── Stage 6: Narrative outline planning + section generation ─────────
     yield evt({"type": "phase", "value": "synthesizing"})
@@ -599,20 +779,23 @@ async def stream_eav_research(question: str,
                      for s in sources_index))
 
     # ── Stage 6.0: ГЛОБАЛЬНЫЙ СИНТЕЗ (research_brief) ────────────────────
-    # Единый «мозг» отчёта: один reasoning-вызов смотрит на ВСЮ картину и строит
-    # аналитический меморандум (тезис, инсайты, архетипы, директивы секциям).
-    # Без него секции были изолированными summary («generic ChatGPT»).
-    yield evt({"type": "stage_status", "stage": "synthesis_brief",
-                "label": "Глобальный аналитический синтез",
-                "detail": "Единый разбор всей картины перед секциями",
-                "estimate_s": 25})
+    # При SYNTH_UNIFIED единый синтез-генератор САМ делает аналитику (он и есть
+    # «мозг»), поэтому отдельный research_brief избыточен — пропускаем его, чтобы
+    # не делать второй тяжёлый reasoning-вызов (он же чаще всего и упирался в
+    # таймаут). В legacy-режиме brief по-прежнему питает 9 генераторов.
+    _SYNTH_UNIFIED = os.getenv("SYNTH_UNIFIED", "1").lower() in ("1", "true", "yes")
     brief = None
-    try:
-        brief = await synthesize_brief(
-            client, question, entities, normalized_facts, matrix,
-            sources_index, core_schema=core_schema)
-    except Exception as e:
-        log.warning("[orchestrator] research_brief failed: %s", e)
+    if not _SYNTH_UNIFIED:
+        yield evt({"type": "stage_status", "stage": "synthesis_brief",
+                    "label": "Глобальный аналитический синтез",
+                    "detail": "Единый разбор всей картины перед секциями",
+                    "estimate_s": 25})
+        try:
+            brief = await synthesize_brief(
+                client, question, entities, normalized_facts, matrix,
+                sources_index, core_schema=core_schema)
+        except Exception as e:
+            log.warning("[orchestrator] research_brief failed: %s", e)
     if brief:
         yield evt({"type": "stage_status", "stage": "synthesis_brief_done",
                     "label": "Синтез готов",

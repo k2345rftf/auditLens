@@ -202,38 +202,76 @@ def _relevant_excerpt(text: str, product_terms: list[str],
     return "\n…\n".join(c for _, c in picked)
 
 
+# Глубина чтения на ОДИН источник — КОНСТАНТА, не зависит от числа источников.
+# Раньше бюджет делился на n (70000//n): банк с 3 источниками читал каждый по 12k,
+# банк с 10 — по 7k → факты по «богатому» банку оказывались мельче. Теперь каждый
+# источник любого банка читается на одинаковую глубину PER_SOURCE_BUDGET, а общий
+# размер промпта ограничивается числом источников MAX_EXTRACT_SOURCES (симметрия
+# глубины между банками; паритет ЧИСЛА источников обеспечивает orchestrator).
+PER_SOURCE_BUDGET = 8500
+MAX_EXTRACT_SOURCES = 8
+
+
 def _build_sources_block(sources: list[GoldSource],
                           product_terms: list[str] | None = None,
-                          total_budget: int = 70000) -> str:
-    """Собирает блок источников с релевантной выборкой.
-
-    Бюджет распределяется по источникам: при 5 источниках ~12k каждому,
-    при 10 — ~7k. Так общий промпт не раздувается (~18k токенов max),
-    но каждый источник получает достаточно для извлечения фактов.
-    """
+                          per_source: int = PER_SOURCE_BUDGET) -> str:
+    """Собирает блок источников с релевантной выборкой, КОНСТАНТНОЙ глубины."""
     parts = []
     terms = [t.lower() for t in (product_terms or []) if t]
-    n = max(1, len(sources))
-    per = max(4000, min(12000, total_budget // n))
     for i, s in enumerate(sources, 1):
         title = (s.title or s.url)[:120]
-        body = _relevant_excerpt(s.text or "", terms, budget=per)
+        body = _relevant_excerpt(s.text or "", terms, budget=per_source)
         parts.append(f"### Source [{i}] — {title}\nURL: {s.url}\n\n{body}")
     return "\n\n---\n\n".join(parts)
+
+
+# Источник → потолок confidence по доверию (нельзя «high» с блога/отзыва).
+def _trust_confidence_ceiling(trust: float) -> str:
+    if trust >= 0.9:
+        return "high"      # офиц. сайт банка / регулятор
+    if trust >= 0.6:
+        return "medium"    # агрегатор
+    return "low"           # блог/отзыв/неизвестный домен
+
+
+_CONF_RANK = {"high": 3, "medium": 2, "low": 1}
+
+
+def _clamp_confidence(llm_conf: str, trust: float) -> str:
+    """confidence = min(самооценка LLM, потолок по доверию источника).
+
+    Раньше confidence была чистой самооценкой LLM (дефолт 'high'), из-за чего
+    факт с блога становился 'high' и раздувал счётчик «верифицировано». Теперь
+    провенанс источника ограничивает уверенность сверху."""
+    ceiling = _trust_confidence_ceiling(trust)
+    if _CONF_RANK.get(llm_conf, 3) <= _CONF_RANK[ceiling]:
+        return llm_conf if llm_conf in _CONF_RANK else ceiling
+    return ceiling
 
 
 async def extract_facts(client: AsyncOpenAI, entity: Entity,
                           sources: list[GoldSource],
                           core_schema_hint: str | None = None,
-                          model: str | None = None) -> list[Fact]:
+                          model: str | None = None,
+                          slot_ids: set | None = None) -> list[Fact]:
     """Извлекает Fact-объекты для одного entity из gold sources.
 
-    core_schema_hint — рекомендация какие 10-15 атрибутов искать в первую очередь.
+    core_schema_hint — ЗАКРЫТЫЙ список слотов (slot_id), в которые extractor
+        обязан класть факты дословно (контракт против «пустой таблицы»).
+    slot_ids — множество допустимых slot_id для проверки прилипания (логирование).
     """
     if not sources:
         return []
     model = model or os.getenv("LLM_MODEL_SMART") or os.getenv("LLM_MODEL_NAME",
                                                                  "gpt-4o-mini")
+    # Симметрия глубины: читаем максимум MAX_EXTRACT_SOURCES источников, каждый —
+    # на одинаковую глубину. Берём лучшие по gold_score/trust (порядок от finder'а
+    # уже ранжирован, но подстрахуемся). Нумерация source_idx идёт по ЭТОМУ списку.
+    sources = sorted(
+        sources,
+        key=lambda s: -((getattr(s, "gold_score", None) or 0) * 10
+                         + (getattr(s, "trust_score", None) or 0)),
+    )[:MAX_EXTRACT_SOURCES]
     # Термины продукта для релевантной выборки фрагментов больших страниц
     product_terms = [entity.product.lower()]
     product_terms += [s.lower() for s in (entity.product_synonyms or []) if len(s) >= 4]
@@ -253,28 +291,47 @@ async def extract_facts(client: AsyncOpenAI, entity: Entity,
         f"verbatim_quote обязателен, source_idx — номер (1-{len(sources)}). "
         f"НЕ выдумывай чисел."
     )
-    try:
-        resp = await asyncio.wait_for(
+    async def _call(max_toks: int):
+        return await asyncio.wait_for(
             client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": user_msg},
                 ],
-                max_tokens=6000, temperature=0.0,
+                max_tokens=max_toks, temperature=0.0,
             ),
-            timeout=90,
+            timeout=120,
         )
+
+    try:
+        resp = await _call(8000)
     except Exception as e:
         log.warning("[fact_extractor] %s LLM failed: %s", entity.bank_slug, e)
         return []
 
     raw = (resp.choices[0].message.content or "").strip()
+    finish = getattr(resp.choices[0], "finish_reason", None)
     data = _parse_json_array(raw)
+    # АНТИ-ОБРЕЗАНИЕ: если ответ упёрся в лимит токенов и JSON не распарсился —
+    # хвост фактов молча терялся. Один ретрай с бОльшим лимитом.
+    if (not isinstance(data, list) or data is None) and finish == "length":
+        log.warning("[fact_extractor] %s output truncated (finish=length) → retry 12000",
+                     entity.bank_slug)
+        try:
+            resp = await _call(12000)
+            raw = (resp.choices[0].message.content or "").strip()
+            finish = getattr(resp.choices[0], "finish_reason", None)
+            data = _parse_json_array(raw)
+        except Exception as e:
+            log.warning("[fact_extractor] %s retry failed: %s", entity.bank_slug, e)
     if not isinstance(data, list):
         log.warning("[fact_extractor] %s no JSON array (raw 200=%r)",
                      entity.bank_slug, raw[:200])
         return []
+    if finish == "length":
+        log.warning("[fact_extractor] %s STILL truncated after retry — факты могут быть неполны",
+                     entity.bank_slug)
 
     facts: list[Fact] = []
     seen: set[tuple] = set()
@@ -319,12 +376,16 @@ async def extract_facts(client: AsyncOpenAI, entity: Entity,
         confidence = str(item.get("confidence") or "high").strip().lower()
         if confidence not in ("high", "medium", "low"):
             confidence = "high"
+        # Потолок уверенности по доверию источника (item 22): нельзя 'high' с блога.
+        src_trust = getattr(sources[src_idx - 1], "trust_score", None) or 0.0
+        confidence = _clamp_confidence(confidence, src_trust)
 
         # Семантический дедуп: один и тот же attribute может иметь НЕСКОЛЬКО
         # валидных значений (базовая/промо/после-периода ставка, разные условия).
-        # Режем только полные дубли (attr+value+source+условия).
+        # Режем только полные дубли (attr+value+UNIT+source+условия). Без unit
+        # «5 лет» и «5 %» с одинаковыми условиями ошибочно схлопывались.
         cond_key = "|".join(sorted(conditions)) + "##" + qualifications + "##" + "|".join(sorted(exceptions))
-        dkey = (attr, value.lower(), src_idx, cond_key[:160])
+        dkey = (attr, value.lower(), unit.lower(), src_idx, cond_key[:160])
         if dkey in seen:
             continue
         seen.add(dkey)
@@ -347,7 +408,13 @@ async def extract_facts(client: AsyncOpenAI, entity: Entity,
 
     n_high = sum(1 for f in facts if f.audit_priority == "high")
     n_with_conditions = sum(1 for f in facts if f.conditions)
-    log.warning("[fact_extractor] %s × %s → %s facts (%s high-priority, %s w/conditions)",
+    # Прилипание к слотам: сколько фактов легло в core slot_id vs ушло в extra.
+    # Низкое прилипание = LLM игнорит закрытый список → диагностический сигнал.
+    slot_info = ""
+    if slot_ids:
+        in_slot = sum(1 for f in facts if f.attribute in slot_ids)
+        slot_info = f", {in_slot}/{len(facts)} в core-слотах"
+    log.warning("[fact_extractor] %s × %s → %s facts (%s high-priority, %s w/conditions%s)",
                  entity.bank_slug, entity.product[:30], len(facts),
-                 n_high, n_with_conditions)
+                 n_high, n_with_conditions, slot_info)
     return facts

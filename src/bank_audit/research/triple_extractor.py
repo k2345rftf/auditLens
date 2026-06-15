@@ -33,7 +33,16 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class Triple:
-    """Один факт о entity, привязанный к источнику."""
+    """Один факт о entity, привязанный к источнику.
+
+    NB: Triple — это «ячейка матрицы». Раньше при конвертации Fact→Triple
+    весь богатый контекст (conditions/qualifications/exceptions/category) терялся,
+    из-за чего сравнительная таблица показывала голые числа и условная ставка
+    «6,5% при зачислении пенсии» была неотличима от безусловной. Теперь Triple
+    ЗЕРКАЛИТ эти поля Fact'а (без хранения самого объекта — чтобы не плодить
+    цикл импортов и сохранить тривиальную сериализацию), а для многозначных
+    клеток (тарифные лесенки) несёт полный список ступеней в `members`.
+    """
     entity_bank_slug: str
     attribute: str             # snake_case ru
     value: str
@@ -43,6 +52,46 @@ class Triple:
     source_url: str = ""
     excerpt: str = ""
     confidence: str = "high"   # high/medium/low
+    # ── Обогащённый контекст (зеркало Fact; борьба с «голой» таблицей) ──
+    conditions: list[str] = field(default_factory=list)
+    qualifications: str = ""
+    exceptions: list[str] = field(default_factory=list)
+    category: str = ""              # fee/rate/limit/feature/requirement/regulation
+    audit_priority: str = "medium"  # high/medium/low
+    # ── Многозначная клетка (тарифная лесенка/ступени) ──
+    # Для клетки со многими значениями одного атрибута здесь лежат ВСЕ ступени
+    # (каждая — Triple) с их условиями и цитатами. Рендер показывает лесенку,
+    # а не схлопывает её в один врущий диапазон.
+    members: list = field(default_factory=list)   # list[Triple]
+    is_range: bool = False
+    # ── Явное состояние «данные не найдены» (отличается от «нет атрибута») ──
+    data_missing: bool = False
+
+    @property
+    def has_qualifiers(self) -> bool:
+        return bool(self.conditions or self.qualifications or self.exceptions)
+
+    def cell_text(self) -> str:
+        """Значение + компактный маркер условности для ячейки таблицы.
+
+        Условная ставка получает видимый маркер «·усл.», чтобы аудитор не
+        принял её за безусловную. Полную расшифровку условий даёт сноска/экспорт.
+        """
+        s = f"{self.value} {self.unit}".strip()
+        if self.has_qualifiers:
+            s = f"{s} ·усл."
+        return s
+
+    def qualifier_text(self) -> str:
+        """Расшифровка условий/сегмента/исключений одной строкой (для сноски)."""
+        parts: list[str] = []
+        if self.conditions:
+            parts.append("; ".join(self.conditions))
+        if self.qualifications:
+            parts.append(self.qualifications)
+        if self.exceptions:
+            parts.append("исключения: " + "; ".join(self.exceptions))
+        return " — ".join(p for p in parts if p)
 
     def to_dict(self) -> dict:
         return {
@@ -55,67 +104,14 @@ class Triple:
             "source_url":    self.source_url,
             "excerpt":       self.excerpt[:300],
             "confidence":    self.confidence,
+            "conditions":    self.conditions,
+            "qualifications": self.qualifications,
+            "exceptions":    self.exceptions,
+            "category":      self.category,
+            "audit_priority": self.audit_priority,
+            "is_range":      self.is_range,
+            "members":       [m.to_dict() for m in self.members] if self.members else [],
         }
-
-
-SYSTEM_PROMPT = """Ты — экстрактор фактов из банковских документов. Твоя
-задача — извлечь ВСЕ конкретные характеристики ПРОДУКТА из текста, в виде
-структурированных троек (атрибут, значение, единица_измерения).
-
-ПРАВИЛА:
-
-1) АТРИБУТЫ — НАЗВАНИЯ ХАРАКТЕРИСТИК ПРОДУКТА:
-   • snake_case на русском: "минимальная_ставка", "годовая_комиссия",
-     "лимит_снятия_наличных", "максимальная_сумма", "срок_действия_доверенности",
-     "первоначальный_взнос", "кэшбэк_базовый", "возрастные_ограничения"
-   • НЕ копируй фразу из текста дословно. Нормализуй ("комиссия за выпуск" =
-     "выпуск_карты_бесплатно" если 0₽, или "комиссия_за_выпуск" с value=300).
-   • Каждый атрибут УНИКАЛЕН в выходе.
-
-2) ЗНАЧЕНИЯ — ТО ЧТО ИЗМЕРЯЕТСЯ:
-   • Числовые: "6.5", "300000", "30" (как строка для унификации)
-   • Перечисления: "паспорт, СНИЛС, справка 2-НДФЛ"
-   • Булево: "да", "нет"
-   • Диапазон: "от 6 до 22" с unit="%" (или две отдельные тройки min/max)
-
-3) ЕДИНИЦЫ ИЗМЕРЕНИЯ: "%", "₽", "руб/мес", "лет", "дней", "млн руб",
-   "тыс руб/день", "рабочих дней". Без unit для перечислений и булевых.
-
-4) ИСТОЧНИК: source_idx — это НОМЕР В ПЕРЕДАННОМ СПИСКЕ sources (1-based).
-   Excerpt — короткая цитата 100-300 chars, дословно из текста.
-
-5) CONFIDENCE:
-   • "high"   — точные числа/факты прямо в продуктовом документе банка
-   • "medium" — пересказ или со страницы агрегатора
-   • "low"    — из обзора/блога/отзыва
-
-6) НЕ ИЗВЛЕКАЙ:
-   ❌ Маркетинговые слоганы («Лучший выбор!», «Удобно и быстро»)
-   ❌ Числа из ПРОМО-АКЦИЙ если они не относятся к базовым условиям продукта
-     (различай: «годовое обслуживание 0 ₽» — продуктовый факт ✅
-                «бонус 25% по акции CityDrive» — это акция ❌)
-   ❌ Универсальные банковские правила («звоните на 900»)
-   ❌ Off-topic информацию (про другие продукты этого банка)
-
-7) ЕСЛИ В ТЕКСТЕ НЕТ КОНКРЕТНЫХ ФАКТОВ О ПРОДУКТЕ — верни пустой массив [].
-   Это лучше чем выдумать.
-
-ВЫХОД: JSON массив троек. БЕЗ преамбулы, БЕЗ markdown-fences.
-[
-  {"attribute":"...", "value":"...", "unit":"...", "source_idx":1,
-   "excerpt":"...", "confidence":"high"},
-  ...
-]"""
-
-
-def _build_sources_block(sources: list[GoldSource], max_chars_per: int = 3500) -> str:
-    """Формирует блок с источниками для LLM."""
-    parts = []
-    for i, s in enumerate(sources, 1):
-        title = (s.title or s.url)[:120]
-        body = (s.text or "")[:max_chars_per]
-        parts.append(f"### Source [{i}] — {title}\nURL: {s.url}\n\n{body}")
-    return "\n\n---\n\n".join(parts)
 
 
 def _parse_json_array(raw: str) -> list | None:
@@ -169,94 +165,3 @@ def _try_parse_numeric(val: str, unit: str) -> float | None:
     elif "млн" in ul: f *= 1e6
     elif "тыс" in ul: f *= 1e3
     return f
-
-
-async def extract_triples(client: AsyncOpenAI, entity: Entity,
-                           sources: list[GoldSource],
-                           model: str | None = None,
-                           focus_attribute: str | None = None,
-                           core_schema_hint: str | None = None) -> list[Triple]:
-    """Извлекает тройки из gold sources для одного entity.
-
-    focus_attribute — опциональная фокусировка (gap-filling).
-    core_schema_hint — инструкция «обязательно найди эти 10-15 атрибутов».
-       Это ключевое улучшение качества: без core-schema LLM выдаёт периферию
-       (стоимость карта-стикера 700₽), а главные параметры (выпуск, кешбэк,
-       лимиты) пропускает.
-    """
-    if not sources:
-        return []
-    model = model or os.getenv("LLM_MODEL_SMART") or os.getenv("LLM_MODEL_NAME",
-                                                                 "gpt-4o-mini")
-    sources_block = _build_sources_block(sources)
-    user_msg = (
-        f"# ENTITY\nБанк: {entity.bank_name} (slug: {entity.bank_slug})\n"
-        f"Продукт: {entity.product}\n"
-        + (f"Аудитория: {entity.audience}\n" if entity.audience else "")
-        + (f"\n# FOCUS\nИзвлекай ТОЛЬКО факты по атрибуту «{focus_attribute}»\n"
-            if focus_attribute else "")
-        + (core_schema_hint or "")
-        + f"\n# SOURCES\n{sources_block}\n\n"
-        f"Извлеки тройки. Помни: НЕ выдумывай чисел, только из текста sources. "
-        f"source_idx — НОМЕР источника (1-{len(sources)})."
-    )
-    try:
-        resp = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": user_msg},
-                ],
-                max_tokens=4000, temperature=0.0,
-            ),
-            timeout=60,
-        )
-    except Exception as e:
-        log.warning("[triple_extractor] %s LLM call failed: %s", entity.bank_slug, e)
-        return []
-    raw = (resp.choices[0].message.content or "").strip()
-    data = _parse_json_array(raw)
-    if not isinstance(data, list):
-        log.warning("[triple_extractor] %s no JSON array (raw 200=%r)",
-                     entity.bank_slug, raw[:200])
-        return []
-
-    triples: list[Triple] = []
-    seen_attrs: set[str] = set()
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        attr = (item.get("attribute") or "").strip().lower().replace(" ", "_")
-        if not attr or attr in seen_attrs:
-            continue
-        value = str(item.get("value") or "").strip()
-        if not value or value.lower() in ("null", "none", "—", "-", ""):
-            continue
-        unit = str(item.get("unit") or "").strip()
-        try:
-            src_idx = int(item.get("source_idx") or 0)
-        except Exception:
-            src_idx = 0
-        if src_idx < 1 or src_idx > len(sources):
-            continue
-        excerpt = str(item.get("excerpt") or "").strip()
-        conf = (item.get("confidence") or "high").lower()
-        if conf not in ("high", "medium", "low"):
-            conf = "medium"
-        seen_attrs.add(attr)
-        triples.append(Triple(
-            entity_bank_slug=entity.bank_slug,
-            attribute=attr,
-            value=value,
-            unit=unit,
-            value_numeric=_try_parse_numeric(value, unit),
-            source_idx=src_idx,
-            source_url=sources[src_idx - 1].url,
-            excerpt=excerpt[:300],
-            confidence=conf,
-        ))
-
-    log.warning("[triple_extractor] %s × %s → %s triples",
-                 entity.bank_slug, entity.product[:30], len(triples))
-    return triples

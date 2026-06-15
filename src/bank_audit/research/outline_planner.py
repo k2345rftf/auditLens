@@ -212,6 +212,16 @@ async def plan_sections(client: AsyncOpenAI, question: str,
     # Гарантируем обязательные секции
     must_have = ["key_findings", "comparison_table", "per_entity_breakdown",
                  "risks_recommendations"]
+    # pricing_breakdown — ДЕТЕРМИНИРОВАННО обязателен, если есть масса ценовых
+    # фактов (fee/rate/limit). Раньше LLM-планировщик мог его опустить и аудитор
+    # терял разбор стоимости (item 42).
+    try:
+        n_pricing = sum(1 for f in (facts or [])
+                        if getattr(f, "category", "") in ("fee", "rate", "limit"))
+        if n_pricing >= 3 and "pricing_breakdown" not in must_have:
+            must_have.append("pricing_breakdown")
+    except Exception:
+        pass
     for mh in must_have:
         if mh not in seen_kinds:
             sections.append(Section(

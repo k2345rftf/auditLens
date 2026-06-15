@@ -892,21 +892,39 @@ async def stream_analysis(question: str, history: list[dict],
     либо deep (planner → multi-step → synthesize → verify → charts).
     force_deep — явный override (через UI toggle)."""
     # Routing: deep mode для исследовательских вопросов.
-    # EAV_PIPELINE=1 — новая Knowledge-Graph архитектура (entity → sources →
-    # triples → matrix → render). По умолчанию ВКЛ для качества.
-    from .deep_research import is_deep_question
+    # По умолчанию DEEP_V2=1 — агентская архитектура v2 (conductor → автономные
+    # агенты → analyst → critic). При DEEP_V2=0 откат на старый EAV-pipeline.
+    from .llm_utils import is_deep_question
     if force_deep is True or (force_deep is None and is_deep_question(question)):
-        use_eav = os.getenv("EAV_PIPELINE", "1").lower() in ("1", "true", "yes")
-        if use_eav:
-            from ..research.orchestrator import stream_eav_research
-            async for ev in stream_eav_research(question, history):
-                yield ev
-            return
-        else:
-            from .deep_research import stream_deep_analysis
-            async for ev in stream_deep_analysis(question, history):
-                yield ev
-            return
+        if os.getenv("DEEP_V2", "1").lower() in ("1", "true", "yes"):
+            yielded = False          # §4d: анти «двойной стрим» — откат только если
+            # НИЧЕГО ещё не стримили. Если v2 упала ПОСЛЕ части SSE-событий, откат на
+            # EAV даст склееный двойной отчёт (mode/plan/отчёт ×2 в один поток) →
+            # вместо этого честно завершаем с ошибкой.
+            try:
+                from ..research.v2.orchestrator import stream_deep_research_v2
+                async for ev in stream_deep_research_v2(question, history):
+                    yield ev
+                    yielded = True
+                return
+            except Exception as e:
+                log.warning("[stream_analysis] v2 failed (%s); yielded=%s",
+                             e, yielded)
+                if yielded:
+                    # Уже отдали часть потока — НЕ перезапускаем EAV (склейка).
+                    # Завершаем с явной ошибкой; фронт покажет что есть.
+                    yield json.dumps({"type": "text",
+                                       "chunk": "\n\n⚠ _Сбой на этапе синтеза "
+                                                "отчёта. Частичный результат выше._\n"},
+                                      ensure_ascii=False)
+                    yield json.dumps({"type": "done"}, ensure_ascii=False)
+                    return
+                # Ничего не стримили — безопасно откатиться на EAV.
+        # Legacy EAV-pipeline (fallback)
+        from ..research.orchestrator import stream_eav_research
+        async for ev in stream_eav_research(question, history):
+            yield ev
+        return
 
     # Quick path (текущий single-shot)
     yield json.dumps({"type": "mode", "value": "quick"})
@@ -919,7 +937,7 @@ async def stream_analysis(question: str, history: list[dict],
     )
     # Reasoning-модели (gpt-oss/glm/kimi/deepseek) тратят токены на CoT —
     # без reasoning_effort=low content отвечает обрезано или пусто.
-    from .deep_research import _patch_client_reasoning_effort
+    from .llm_utils import _patch_client_reasoning_effort
     client = _patch_client_reasoning_effort(client)
 
     messages = [
