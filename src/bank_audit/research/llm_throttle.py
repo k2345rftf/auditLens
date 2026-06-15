@@ -27,8 +27,10 @@ log = logging.getLogger(__name__)
 # осмысленно. Тюнится LLM_CALL_WALL_S (легит-вызовы: extract ~3с, reasoning ~40с).
 _WALL_S = float(os.getenv("LLM_CALL_WALL_S", "75"))
 
-# Global semaphore — лимит параллельных in-flight LLM calls
-DEFAULT_MAX_CONCURRENT = 4
+# Global semaphore — лимит параллельных in-flight LLM calls. Был 4: при 4
+# параллельных агентах wave1 пул забивался ими, и tool-итерации/финалы внутри
+# агентов сериализовались глобально. 8 — потолок до 429 (env-настраиваемо).
+DEFAULT_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "8"))
 _global_sem: asyncio.Semaphore | None = None
 
 

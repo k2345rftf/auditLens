@@ -66,7 +66,8 @@ async def stream_deep_research_v2(question: str,
         yield _evt({"type": "done"})
         return
     client = _patch_client_reasoning_effort(client)
-    client = patch_client_throttle(client, max_concurrent=4)
+    from ..llm_throttle import DEFAULT_MAX_CONCURRENT as _MAXC
+    client = patch_client_throttle(client, max_concurrent=_MAXC)  # env LLM_MAX_CONCURRENT, по умолч. 8
 
     conductor_model = (os.getenv("LLM_MODEL_REASONING") or os.getenv("LLM_MODEL_SMART")
                         or os.getenv("LLM_MODEL_NAME", "gpt-4o-mini"))
