@@ -192,9 +192,12 @@ def _search_ddgs(query: str, *, max_results: int = 8,
                 break   # успех — выходим
         except Exception as e:
             log.info("ddgs %s (attempt %s): %s", query[:50], attempt + 1, type(e).__name__)
-        # пусто или ошибка — backoff перед сменой ротации движков
+        # пусто или ошибка — короткий backoff перед сменой ротации движков.
+        # Был 1.5·(n+1) = до 4.5с блокирующего сна на КАЖДЫЙ неудачный поиск
+        # (×20-37 поисков = десятки секунд впустую). Реальную защиту от per-IP
+        # троттла даёт ротация порядка движков, а не длинный сон → режем до 0.6·.
         if attempt < len(backend_orders) - 1:
-            _time.sleep(1.5 * (attempt + 1))
+            _time.sleep(0.6 * (attempt + 1))
     return out[:max_results]
 
 
