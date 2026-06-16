@@ -26,8 +26,18 @@ def _esc(s: Any) -> str:
     return _html.escape(str(s or ""))
 
 
-def _md_to_html(md: str, sources_by_n: dict[int, dict]) -> str:
+def _toc_label(s: str) -> str:
+    """Чистый текст заголовка для оглавления (без markdown/цитат)."""
+    s = re.sub(r"\[\d+\]", "", s or "")
+    s = re.sub(r"[*`#]+", "", s)
+    return s.strip()
+
+
+def _md_to_html(md: str, sources_by_n: dict[int, dict],
+                 toc_out: list | None = None) -> str:
     """Лёгкий markdown → HTML с привязкой [N] к источникам.
+    toc_out (если задан) наполняется заголовками {level,text,id} для оглавления;
+    h1/h2 получают id-якоря для кликабельных переходов из TOC.
     Поддерживает: # заголовки, **bold**, таблицы, списки, blockquote.
     Не использует общий renderMD из jsx — здесь нужен полностью server-side.
     """
@@ -44,6 +54,7 @@ def _md_to_html(md: str, sources_by_n: dict[int, dict]) -> str:
     table_rows: list[list[str]] = []
     list_buf: list[str] = []
     list_ordered = False
+    hnum = 0  # счётчик заголовков для якорей оглавления
 
     def _inline(s: str) -> str:
         s = _esc(s)
@@ -136,8 +147,16 @@ def _md_to_html(md: str, sources_by_n: dict[int, dict]) -> str:
         m1 = re.match(r"^#\s+(.+)$", ln)
         if m4: _flush_list(); out.append(f"<h4>{_inline(m4.group(1))}</h4>"); continue
         if m3: _flush_list(); out.append(f"<h3>{_inline(m3.group(1))}</h3>"); continue
-        if m2: _flush_list(); out.append(f"<h2>{_inline(m2.group(1))}</h2>"); continue
-        if m1: _flush_list(); out.append(f"<h1>{_inline(m1.group(1))}</h1>"); continue
+        if m2:
+            _flush_list(); hnum += 1; hid = f"sec-{hnum}"
+            if toc_out is not None:
+                toc_out.append({"level": 2, "text": _toc_label(m2.group(1)), "id": hid})
+            out.append(f'<h2 id="{hid}">{_inline(m2.group(1))}</h2>'); continue
+        if m1:
+            _flush_list(); hnum += 1; hid = f"sec-{hnum}"
+            if toc_out is not None:
+                toc_out.append({"level": 1, "text": _toc_label(m1.group(1)), "id": hid})
+            out.append(f'<h1 id="{hid}">{_inline(m1.group(1))}</h1>'); continue
         # Списки
         ordered_m = re.match(r"^\s*(\d+)\.\s+(.+)$", ln)
         bullet_m  = re.match(r"^\s*[\-\*\+•]\s+(.+)$", ln)
@@ -235,7 +254,7 @@ def _render_verification_section(unverified: list[dict]) -> str:
             f'</li>'
         )
     return f'''
-    <section class="verification-page">
+    <section class="verification-page" id="sec-verify">
       <h2>Требуют ручной проверки</h2>
       <div class="lede">
         Автоматический верификатор не нашёл подтверждения этим утверждениям
@@ -282,7 +301,7 @@ def _render_ranking_section(ranking: dict | None) -> str:
             f'<div class="rank-rationale">{rationale}</div>'
             f'</div></li>')
     return f'''
-    <section class="block-page ranking-page">
+    <section class="block-page ranking-page" id="sec-ranking">
       <h2>🏆 Рейтинг</h2>
       {f'<div class="lede">{crit}</div>' if crit else ''}
       <ol class="rank-list">{"".join(cards)}</ol>
@@ -311,7 +330,7 @@ def _render_insights_section(insights: list[dict] | None) -> str:
     if not items:
         return ""
     return f'''
-    <section class="block-page insights-page">
+    <section class="block-page insights-page" id="sec-insights">
       <h2>💡 Ключевые инсайты</h2>
       <ul class="insight-list">{"".join(items)}</ul>
     </section>'''
@@ -335,7 +354,7 @@ def _render_gaps_section(gaps: dict | None) -> str:
     if not items:
         return ""
     return f'''
-    <section class="block-page gaps-page">
+    <section class="block-page gaps-page" id="sec-gaps">
       <h2>⚠ Пробелы покрытия</h2>
       <div class="lede">Данные, которые не удалось собрать в открытых источниках — для честной оценки полноты.</div>
       <ul class="gap-list">{"".join(items)}</ul>
@@ -401,7 +420,7 @@ def _render_charts_section(charts: list[dict]) -> tuple[str, str]:
     if not items:
         return "", ""
     section = (
-        '<section class="charts-page">'
+        '<section class="charts-page" id="sec-charts">'
         '<h2>Визуализация ключевых метрик</h2>'
         '<div class="lede">Ключевые числовые сравнения из отчёта</div>'
         + "".join(items) +
@@ -478,6 +497,22 @@ def _render_charts_section(charts: list[dict]) -> tuple[str, str]:
     return section, js
 
 
+def _render_toc(entries: list[dict]) -> str:
+    """Авто-оглавление по заголовкам отчёта + крупным секциям. Ссылки
+    кликабельны в PDF (Chromium сохраняет внутренние якоря)."""
+    if not entries:
+        return ""
+    items = []
+    for e in entries:
+        cls = "toc-l1" if e.get("level", 1) == 1 else "toc-l2"
+        items.append(f'<li class="{cls}"><a href="#{e["id"]}">{_esc(e["text"])}</a></li>')
+    return f'''
+    <section class="toc-page">
+      <h2>Содержание</h2>
+      <ul class="toc-list">{"".join(items)}</ul>
+    </section>'''
+
+
 def build_pdf_html(*, question: str, report_md: str,
                    sources: list[dict] | None = None,
                    meta: dict | None = None,
@@ -491,7 +526,8 @@ def build_pdf_html(*, question: str, report_md: str,
     sources = sources or []
     sources_by_n = {s["n"]: s for s in sources if s.get("n") is not None}
     meta = meta or {}
-    body_html = _md_to_html(report_md or "", sources_by_n)
+    toc_entries: list[dict] = []
+    body_html = _md_to_html(report_md or "", sources_by_n, toc_out=toc_entries)
     sources_html = _render_sources_section(sources)
     unverified = (verification or {}).get("unverified") or []
     verification_html = _render_verification_section(unverified)
@@ -501,6 +537,18 @@ def build_pdf_html(*, question: str, report_md: str,
     insights_html = _render_insights_section(insights)
     gaps_html = _render_gaps_section(gaps)
     claimcheck_html = _render_claimcheck_section(claim_check)
+    # Оглавление: заголовки тела + крупные секции (в порядке документа).
+    for cond, label, sid in (
+        (ranking_html, "🏆 Рейтинг", "sec-ranking"),
+        (insights_html, "💡 Ключевые инсайты", "sec-insights"),
+        (charts_html, "Визуализация ключевых метрик", "sec-charts"),
+        (verification_html, "Требуют ручной проверки", "sec-verify"),
+        (gaps_html, "⚠ Пробелы покрытия", "sec-gaps"),
+        (sources_html, "Источники", "sec-sources"),
+    ):
+        if cond:
+            toc_entries.append({"level": 1, "text": label, "id": sid})
+    toc_html = _render_toc(toc_entries)
     now_iso = datetime.now().strftime("%Y-%m-%d · %H:%M")
     n_cites = len(set(re.findall(r"\[(\d{1,3})\]", report_md or "")))
     audit_id = meta.get("audit_id") or now_iso.replace(" ", "")[:14]
@@ -926,6 +974,14 @@ body {{
 .cc-pill {{ font-family: 'Geist', sans-serif; font-size: 9pt; padding: 4px 11px; border-radius: 12px; }}
 .cc-pill.ok {{ background: #e7f4ec; color: #1a7f4b; }}
 .cc-pill.warn {{ background: #fdf3e0; color: #9a6a00; }}
+/* ── Авто-оглавление по заголовкам ── */
+.toc-page {{ page-break-after: always; margin-top: 4mm; }}
+.toc-list {{ list-style: none; padding: 0; margin: 6mm 0 0; }}
+.toc-list li {{ margin: 3px 0; line-height: 1.4; }}
+.toc-list a {{ text-decoration: none; color: #16181d; }}
+.toc-l1 {{ font-family: 'Geist', sans-serif; font-weight: 600; font-size: 11.5pt; margin-top: 8px; }}
+.toc-l2 {{ font-family: 'Geist', sans-serif; font-size: 9.5pt; padding-left: 16px; }}
+.toc-l2 a {{ color: #3a3d44; }}
 </style>
 </head>
 <body>
@@ -944,6 +1000,8 @@ body {{
     </dl>
   </section>
 
+  {toc_html}
+
   <section class="body">
     {body_html}
   </section>
@@ -960,7 +1018,7 @@ body {{
 
   {gaps_html}
 
-  <section class="sources-page">
+  <section class="sources-page" id="sec-sources">
     <h2>Источники</h2>
     <div class="lede">Полный список с метаданными — для верификации цитат</div>
     {sources_html}
