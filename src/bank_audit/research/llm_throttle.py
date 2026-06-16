@@ -27,6 +27,37 @@ log = logging.getLogger(__name__)
 # осмысленно. Тюнится LLM_CALL_WALL_S (легит-вызовы: extract ~3с, reasoning ~40с).
 _WALL_S = float(os.getenv("LLM_CALL_WALL_S", "75"))
 
+# Дифференцированная стена по ВЕСУ вызова (главная утечка времени: в «плохом окне»
+# эндпоинта вызов медленно стримится, бьётся о стену и ретраится — до 5×75с=375с
+# мёртвого ожидания на ОДИН логический вызов).
+#   • Навигационные вызовы агента (tools+tool_choice, без большого max_tokens) —
+#     короткие по природе (решение «какой tool позвать»). Короткая стена → в плохом
+#     окне бросаем быстро и ретраим, не копим мёртвое время. Качество не страдает:
+#     осмысленный навигационный вызов укладывается в секунды.
+#   • Тяжёлые вызовы (max_tokens≥6000: conductor-план, отчёт аналитика, финальная
+#     экстракция фактов) реально стримят 6-8k токенов — в медленном окне это может
+#     САМО превысить 75с. Даём БОЛЬШЕ времени, чтобы дошли, а не убивались на 75с и
+#     рестартовали с нуля (повторный стрим 8k токенов — хуже, чем дождаться).
+_WALL_LOOP_S  = float(os.getenv("LLM_CALL_WALL_LOOP_S",  "60"))
+_WALL_HEAVY_S = float(os.getenv("LLM_CALL_WALL_HEAVY_S", "120"))
+
+# Пер-таймаутный лимит ретраев. Транзиент (обрыв соединения) флапает быстро — его
+# ретраим щедро. А чистый wall-таймаут стоит ЦЕЛУЮ стену: после 3 таймаутов окно
+# явно плохое, дальнейшие ретраи жгут минуты почти без шанса. Качество-нейтрально:
+# вызов, упавший по таймауту 3×, почти наверняка упал бы и 4-5×.
+_TIMEOUT_MAX_RETRIES = int(os.getenv("LLM_TIMEOUT_MAX_RETRIES", "3"))
+
+
+def _wall_for(kwargs: dict) -> float:
+    """Стена под конкретный вызов: короткая для навигации, длинная для тяжёлого
+    вывода, дефолт для остального (critic ~1500 ток. и т.п.)."""
+    mt = kwargs.get("max_tokens") or 0
+    if kwargs.get("tools") and kwargs.get("tool_choice") and mt == 0:
+        return _WALL_LOOP_S
+    if mt >= 6000:
+        return _WALL_HEAVY_S
+    return _WALL_S
+
 # Global semaphore — лимит параллельных in-flight LLM calls. Был 4: при 4
 # параллельных агентах wave1 пул забивался ими, и tool-итерации/финалы внутри
 # агентов сериализовались глобально. 8 — потолок до 429 (env-настраиваемо).
@@ -132,19 +163,28 @@ async def call_with_throttle(coro_fn, *args, max_retries: int = 5,
     """
     sem = get_semaphore()
     last_exc: Exception | None = None
+    wall = _wall_for(kwargs)          # стена под вес ЭТОГО вызова
+    timeout_count = 0
 
     for attempt in range(max_retries):
         async with sem:
             try:
                 # Wall-clock лимит на вызов: обрывает медленный стрим, который иначе
                 # ползёт минутами (httpx read-timeout его не ловит). Таймаут → ретрай.
-                return await asyncio.wait_for(coro_fn(*args, **kwargs), timeout=_WALL_S)
+                return await asyncio.wait_for(coro_fn(*args, **kwargs), timeout=wall)
             except Exception as e:
                 last_exc = e
                 is_timeout = isinstance(e, asyncio.TimeoutError)
                 if not (is_timeout or _is_rate_limit_error(e) or _is_transient_error(e)):
                     # Не rate-limit/транзиент/таймаут — пробрасываем сразу (caller обработает)
                     raise
+                if is_timeout:
+                    timeout_count += 1
+                    if timeout_count >= _TIMEOUT_MAX_RETRIES:
+                        # Окно эндпоинта стабильно плохое — стоп, не жжём ещё одну стену.
+                        log.warning("[llm_throttle] %s wall-таймаутов (wall=%.0fs) — "
+                                     "стоп ретраев, отдаём ошибку наверх", timeout_count, wall)
+                        raise
                 # Rate-limit / транзиент / wall-таймаут: backoff outside semaphore
         # Backoff (за пределами sem чтобы другие могли работать)
         if _is_rate_limit_error(last_exc):
