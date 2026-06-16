@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -198,7 +199,7 @@ class BaseAgent:
 
     def __init__(self, client: AsyncOpenAI, model: str,
                   mission: AgentMission, bundle: KnowledgeBundle,
-                  max_iterations: int = 10,
+                  max_iterations: int = 8,
                   loop_model: str | None = None,
                   final_model: str | None = None,
                   smart_model: str | None = None) -> None:
@@ -223,6 +224,8 @@ class BaseAgent:
         # форсируем read_url жёстким tool_choice, подсунув эти URL'ы).
         self._pending_read_urls: list[str] = []
         self._forced_read_done = False
+        self._search_capped_notified = False
+        self._read_capped_notified = False
 
     # ── main loop ──────────────────────────────────────────────────────
     async def run(self) -> dict:
@@ -246,6 +249,52 @@ class BaseAgent:
             used = self.progress.tools_used
             n_search = sum(1 for t in used if t in ("web_search", "semantic_search"))
             n_read = sum(1 for t in used if t == "read_url")
+
+            # ── Жёсткий потолок web_search ───────────────────────────────────
+            # Агенты игнорят «1-2 поиска» в промпте и наматывают 5-6 web_search до
+            # max_iterations → главная утечка времени (поиск медленный, а даёт лишь
+            # сниппеты — факты ТОЛЬКО из read_url, поэтому срезать лишние поиски
+            # качество-нейтрально). После лимита убираем web_search из доступных
+            # инструментов → агент обязан читать/финалить. Кэп ≈1 поиск на субъект
+            # + 1 кросс-источник (env V2_WEB_SEARCH_CAP_MIN — нижняя граница).
+            n_websearch = sum(1 for t in used if t == "web_search")
+            search_cap = max(int(os.getenv("V2_WEB_SEARCH_CAP_MIN", "3")),
+                              len(self.mission.subjects) + 1)
+            iter_tools = tools_schema
+            if n_websearch >= search_cap:
+                iter_tools = [t for t in tools_schema
+                              if t["function"]["name"] != "web_search"]
+                if not self._search_capped_notified:
+                    messages.append({"role": "user", "content":
+                        f"Лимит web_search ({search_cap}) исчерпан — кандидатов "
+                        "достаточно. БОЛЬШЕ НЕ ИЩИ. Прочитай (read_url) самые "
+                        "релевантные найденные страницы и верни факты по заданию."})
+                    self._search_capped_notified = True
+                    log.warning("[agent:%s] web_search cap (%s) достигнут — "
+                                 "отключаю поиск, форсирую чтение/финал",
+                                 self.mission.agent_id, search_cap)
+
+            # ── Жёсткий потолок read_url (гейт сходимости) ───────────────────
+            # Корень лага: под нагрузкой агент мотает итерации, читая по одному —
+            # история раздувается (~6КБ/чтение) → поздние nav-вызовы и финальная
+            # Sonnet-экстракция тяжелеют и бьются о wall-стену. После read_cap
+            # чтений убираем read_url+web_search → модель ОБЯЗАНА финалить из уже
+            # прочитанного. Полезных чтений в селективном режиме ~3-5 (SPA-страницы
+            # офиц.сайтов всё равно пустые) → качество-нейтрально.
+            read_cap = max(int(os.getenv("V2_READ_URL_CAP", "5")),
+                           len(self.mission.subjects) + 1)
+            if n_read >= read_cap:
+                iter_tools = [t for t in iter_tools
+                              if t["function"]["name"] not in ("read_url", "web_search")]
+                if not self._read_capped_notified:
+                    messages.append({"role": "user", "content":
+                        f"Прочитано достаточно ({n_read} страниц) — кандидатов хватает. "
+                        "СТОП собирать. Верни ИТОГОВЫЙ JSON с фактами по заданию из "
+                        "уже прочитанного (числа/цитаты со ссылками [N])."})
+                    self._read_capped_notified = True
+                    log.warning("[agent:%s] read_url cap (%s) достигнут — "
+                                 "форсирую финал из собранного",
+                                 self.mission.agent_id, read_cap)
 
             # ── Анти-«паралич поиска» (жёсткий forced-read) ───────────────────
             # Баг A/B: агент (особенно Haiku) крутит web_search до max_iterations,
@@ -275,7 +324,7 @@ class BaseAgent:
                              len(self._pending_read_urls))
 
             try:
-                resp = await self._call_llm(messages, tools_schema,
+                resp = await self._call_llm(messages, iter_tools,
                                              force_tool=force_tool)
             except Exception as e:
                 # Сбой навигационного вызова — чаще всего wall-таймаут в «плохом

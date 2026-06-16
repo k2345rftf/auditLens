@@ -46,6 +46,11 @@ _WALL_HEAVY_S = float(os.getenv("LLM_CALL_WALL_HEAVY_S", "120"))
 # явно плохое, дальнейшие ретраи жгут минуты почти без шанса. Качество-нейтрально:
 # вызов, упавший по таймауту 3×, почти наверняка упал бы и 4-5×.
 _TIMEOUT_MAX_RETRIES = int(os.getenv("LLM_TIMEOUT_MAX_RETRIES", "3"))
+# Для ТЯЖЁЛЫХ вызовов (финальная экстракция/отчёт, max_tokens≥6000) ретрай почти
+# бесполезен: на медленном окне эндпоинт заново стримит те же 8000 токенов и снова
+# упирается в 120с-стену. 3×120=360с мёртвого времени на ОДИН агент. Поэтому тяжёлым
+# даём меньше попыток — после них caller фоллбэчит на готовый контент loop-модели.
+_TIMEOUT_MAX_RETRIES_HEAVY = int(os.getenv("LLM_TIMEOUT_MAX_RETRIES_HEAVY", "2"))
 
 
 def _wall_for(kwargs: dict) -> float:
@@ -164,6 +169,9 @@ async def call_with_throttle(coro_fn, *args, max_retries: int = 5,
     sem = get_semaphore()
     last_exc: Exception | None = None
     wall = _wall_for(kwargs)          # стена под вес ЭТОГО вызова
+    # Тяжёлым стрим-вызовам — меньше таймаут-ретраев (перестрим бесполезен).
+    timeout_cap = (_TIMEOUT_MAX_RETRIES_HEAVY if wall >= _WALL_HEAVY_S
+                   else _TIMEOUT_MAX_RETRIES)
     timeout_count = 0
 
     for attempt in range(max_retries):
@@ -180,7 +188,7 @@ async def call_with_throttle(coro_fn, *args, max_retries: int = 5,
                     raise
                 if is_timeout:
                     timeout_count += 1
-                    if timeout_count >= _TIMEOUT_MAX_RETRIES:
+                    if timeout_count >= timeout_cap:
                         # Окно эндпоинта стабильно плохое — стоп, не жжём ещё одну стену.
                         log.warning("[llm_throttle] %s wall-таймаутов (wall=%.0fs) — "
                                      "стоп ретраев, отдаём ошибку наверх", timeout_count, wall)
