@@ -278,8 +278,25 @@ class BaseAgent:
                 resp = await self._call_llm(messages, tools_schema,
                                              force_tool=force_tool)
             except Exception as e:
-                log.warning("[agent:%s] LLM call failed (iter %s): %s",
-                             self.mission.agent_id, iteration, e)
+                # Сбой навигационного вызова — чаще всего wall-таймаут в «плохом
+                # окне» эндпоинта (после кэпа ретраев в throttle). НЕ теряем уже
+                # прочитанные страницы: если что-то собрано — принудительно
+                # извлекаем факты из накопленной истории (сильной моделью). Без
+                # этого break минует финал-ветку → final_artifacts={} → 0 фактов,
+                # хотя read_url успел отработать. Грейсфул-деградация > потеря.
+                log.warning("[agent:%s] LLM call failed (iter %s): %s%s",
+                             self.mission.agent_id, iteration, e,
+                             " — грейсфул-финал из собранного"
+                             if self.progress.n_tool_calls else "")
+                if self.progress.n_tool_calls > 0 and not final_artifacts:
+                    try:
+                        fresp = await self._call_llm(messages, [], force_final=True,
+                                                     model=self.final_model)
+                        final_artifacts = self._safe_parse(
+                            fresp.choices[0].message.content or "")
+                    except Exception as e2:
+                        log.warning("[agent:%s] грейсфул-финал тоже упал: %s",
+                                     self.mission.agent_id, e2)
                 break
 
             choice = resp.choices[0]
