@@ -1327,6 +1327,68 @@ function ThinkingPanel({text, stage, active}){
   );
 }
 
+// ─── Модуль «asking» — clarification-воронка. Кликабельные варианты (single/
+//     multi) + «другое» + free-text. Один экран, скип всегда доступен. ───────
+function ClarifyCard({msg, onSubmit, onSkip}){
+  const qs=msg.questions||[];
+  const [sel,setSel]=useState({});
+  const get=(id)=>sel[id]||{vals:[],other:"",otherOn:false};
+  const toggle=(qq,label)=>setSel(s=>{
+    const cur=get(qq.id); let vals=(cur.vals||[]).slice();
+    if(qq.type==="single") vals=[label];
+    else vals=vals.includes(label)?vals.filter(v=>v!==label):[...vals,label];
+    return {...s,[qq.id]:{...cur,vals}};
+  });
+  const setText=(qq,txt)=>setSel(s=>({...s,[qq.id]:{...get(qq.id),vals:txt?[txt]:[]}}));
+  const setOther=(qq,txt)=>setSel(s=>({...s,[qq.id]:{...get(qq.id),other:txt}}));
+  const toggleOther=(qq)=>setSel(s=>{const c=get(qq.id);return {...s,[qq.id]:{...c,otherOn:!c.otherOn}};});
+  const isAns=(qq)=>{const c=get(qq.id);return (c.vals&&c.vals.length)||(c.otherOn&&(c.other||"").trim());};
+  const answered=qs.filter(isAns).length;
+  const submit=()=>{
+    const answers=qs.map(qq=>{const c=get(qq.id);
+      return {question:qq.question, selected:(c.vals||[]).filter(Boolean), other:(c.otherOn?(c.other||"").trim():"")};
+    }).filter(a=>a.selected.length||a.other);
+    onSubmit(msg.question,msg.forceDeep,answers);
+  };
+  return <div className="clarify-card fade-in">
+    <div className="clarify-head">
+      <span className="dr-stage-pulse"/>
+      <span className="eyebrow" style={{color:"var(--accent)"}}>Уточнение запроса · {qs.length} вопр.</span>
+      <button className="clarify-x" onClick={()=>onSkip(msg.question,msg.forceDeep)} aria-label="Пропустить">✕</button>
+    </div>
+    <div className="clarify-sub">Ответьте, чтобы отчёт попал точно в цель — это займёт ~15 секунд.</div>
+    {qs.map((qq,qi)=>{
+      const c=get(qq.id);
+      return <div className="clarify-q" key={qi}>
+        <div className="clarify-q-t">{qq.question}</div>
+        {qq.type==="text"
+          ? <input className="clarify-input" placeholder="свой ответ…"
+                   value={(c.vals&&c.vals[0])||""} onChange={e=>setText(qq,e.target.value)}/>
+          : <div className="clarify-chips">
+              {(qq.options||[]).map((o,oi)=>{
+                const on=(c.vals||[]).includes(o.label);
+                return <span key={oi} className={"clarify-chip "+qq.type+(on?" on":"")}
+                             onClick={()=>toggle(qq,o.label)} title={o.hint||""}>
+                  <span className="clarify-box">{on&&<Ic.check/>}</span>{o.label}
+                  {o.recommended&&<span className="clarify-rec">реком.</span>}
+                </span>;
+              })}
+              {qq.allow_other&&<span className={"clarify-chip dashed"+(c.otherOn?" on":"")}
+                onClick={()=>toggleOther(qq)}>Другое…</span>}
+            </div>}
+        {qq.allow_other&&qq.type!=="text"&&c.otherOn&&
+          <input className="clarify-input" style={{marginTop:"8px"}} placeholder="свой вариант"
+                 value={c.other} onChange={e=>setOther(qq,e.target.value)}/>}
+      </div>;
+    })}
+    <div className="clarify-foot">
+      <span className="clarify-count">отвечено {answered} / {qs.length}</span>
+      <button className="clarify-skip-btn" onClick={()=>onSkip(msg.question,msg.forceDeep)}>Пропустить</button>
+      <button className="clarify-go" onClick={submit}>Уточнить и запустить ↗</button>
+    </div>
+  </div>;
+}
+
 // ─── Stage status — prominent banner для долгих LLM-этапов.
 //     Показывает что pipeline жив, что именно делает прямо сейчас и
 //     примерно сколько ждать. Прогресс-индикатор по времени (для merging
@@ -2184,15 +2246,51 @@ function AIPage(){
     }
   };
 
-  const send=(txt)=>{
+  // Запуск research: ai-bubble + стрим. История БЕЗ clarify-сообщений.
+  const runSend=(t,forceDeep)=>{
+    const history=msgsRef.current
+      .filter(m=>m.role==="user"||m.role==="ai")
+      .map(m=>({role:m.role==="user"?"user":"assistant",content:m.text||""}));
+    setLoading(true);
+    setMsgs(m=>[...m,{role:"ai",text:"",tools:[]}]);
+    streamChat(t,history,forceDeep);
+  };
+  // Точка входа: модуль «asking» — сначала clarify-воронка (если запрос неполный),
+  // потом research. Fail-open: ошибка/полный запрос → сразу research.
+  const send=async(txt)=>{
     const t=(txt||q).trim();
     if(!t||loading)return;
-    const history=msgsRef.current.map(m=>({role:m.role==="user"?"user":"assistant",content:m.text||""}));
     setQ("");
-    setLoading(true);
     const forceDeep = deepMode ? true : null;     // null = auto-detect на бэке
-    setMsgs(m=>[...m,{role:"user",text:t},{role:"ai",text:"",tools:[]}]);
-    streamChat(t,history,forceDeep);
+    setMsgs(m=>[...m,{role:"user",text:t}]);
+    setLoading(true);
+    let data=null;
+    try{ data=await apiPost("/api/ai/clarify",{question:t,deep:!!deepMode}); }catch(e){ data=null; }
+    if(!data || data.complete!==false || !(Array.isArray(data.questions)&&data.questions.length)){
+      runSend(t,forceDeep);                       // воронка не нужна / ошибка → research
+      return;
+    }
+    setLoading(false);                            // интерактивная карточка вопросов
+    setMsgs(m=>[...m,{role:"clarify",question:t,forceDeep,questions:data.questions}]);
+  };
+  // Submit воронки: собрать обогащённый промпт (сервер) → пометить запрос → research.
+  const clarifySubmit=async(srcQuestion,forceDeep,answers)=>{
+    if(loading)return;
+    setLoading(true);
+    setMsgs(m=>m.filter(x=>x.role!=="clarify"));
+    let enriched=srcQuestion;
+    if(answers&&answers.length){
+      try{ const r=await apiPost("/api/ai/clarify",{question:srcQuestion,answers});
+           if(r&&r.enriched_question) enriched=r.enriched_question; }catch{}
+    }
+    if(enriched!==srcQuestion) setMsgs(m=>{const u=[...m];
+      for(let i=u.length-1;i>=0;i--){ if(u[i].role==="user"){u[i]={...u[i],refined:enriched};break;} }
+      return u;});
+    runSend(enriched,forceDeep);
+  };
+  const clarifySkip=(srcQuestion,forceDeep)=>{
+    setMsgs(m=>m.filter(x=>x.role!=="clarify"));
+    runSend(srcQuestion,forceDeep);
   };
 
   return <div className="fade-in chat-shell">
@@ -2201,6 +2299,11 @@ function AIPage(){
     <div className="chat-stream">
       <div className="chat-feed" ref={feedRef}>
         {msgs.map((m,i)=>{
+          if(m.role==="clarify"){
+            return <div key={i} className="chat-msg ai"><div className="chat-bubble chat-bubble-deep">
+              <ClarifyCard msg={m} onSubmit={clarifySubmit} onSkip={clarifySkip}/>
+            </div></div>;
+          }
           if(m.mode==="deep"){
             // Editorial document layout
             const userQ = (i>0 && msgs[i-1]?.role==="user") ? msgs[i-1].text : "Аудит-отчёт";
