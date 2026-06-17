@@ -328,7 +328,8 @@ tbody tr.is-sber td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
   font-family:'Source Serif 4','Georgia',serif;font-feature-settings:"sups";
   font-size:13px;font-weight:600;color:var(--ink);margin-right:6px;
 }
-.dr-rail-bank{font-size:13px;font-weight:500;color:var(--ink);line-height:1.3;margin-bottom:2px}
+.dr-rail-bank{font-size:13px;font-weight:500;color:var(--ink);line-height:1.3;margin-bottom:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .dr-rail-domain{
   font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-3);
   margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;
@@ -379,14 +380,16 @@ tbody tr.is-sber td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
 .dr-trace-toggle:hover{color:var(--ink)}
 .dr-trace-expanded{flex-direction:column;align-items:stretch;padding:10px 12px;gap:0}
 .dr-trace-row{
-  display:grid;grid-template-columns:22px 1fr auto auto;gap:10px;align-items:baseline;
+  display:grid;grid-template-columns:22px minmax(0,1fr) auto auto;gap:10px;align-items:center;
   padding:4px 0;border-bottom:1px dotted var(--hair);font-size:11.5px;
 }
 .dr-trace-row:last-child{border-bottom:0}
 .dr-trace-num{color:var(--ink-3);font-size:10.5px}
-.dr-trace-title{color:var(--ink);font-family:'Geist','Inter',sans-serif;font-size:12.5px}
-.dr-trace-tool{color:var(--ink-3)}
-.dr-trace-found{color:var(--ink-2)}
+.dr-trace-title{color:var(--ink);font-family:'Geist','Inter',sans-serif;font-size:12.5px;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dr-trace-tool{color:var(--ink-3);white-space:nowrap}
+.dr-trace-found{color:var(--ink-2);justify-self:end;white-space:nowrap;text-align:right;
+  font-family:'JetBrains Mono',monospace;font-size:11px;font-variant-numeric:tabular-nums}
 .dr-trace-row-running .dr-trace-title{color:var(--accent);position:relative}
 .dr-trace-row-running .dr-trace-title::after{
   content:"";position:absolute;left:0;right:0;bottom:-2px;height:1.5px;
@@ -631,7 +634,8 @@ td .dr-conflict{padding:0 5px 1px;font-size:9.5px}
   width:7px;height:7px;border-radius:50%;background:var(--ink-2);
   flex-shrink:0;animation:pulse 1.4s ease-in-out infinite;
 }
-.dr-stage-label{font-weight:500;letter-spacing:-.005em;flex:1}
+.dr-stage-label{font-weight:500;letter-spacing:-.005em;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dr-stage-est{
   font-family:'JetBrains Mono',monospace;font-size:11.5px;
   color:var(--ink-3);letter-spacing:.02em;font-variant-numeric:tabular-nums;
@@ -679,8 +683,9 @@ td .dr-conflict{padding:0 5px 1px;font-size:9.5px}
 .dr-agent-card-run .dr-agent-dot{animation:pulse 1.4s ease-in-out infinite}
 .dr-agent-name{flex:1;font-size:13px;color:var(--ink);font-weight:450;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dr-agent-status{font-size:11px;letter-spacing:.02em;flex:none}
-.dr-agent-model{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-4);flex:none}
+.dr-agent-status{font-size:11px;letter-spacing:.02em;flex:none;white-space:nowrap}
+.dr-agent-model{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-4);
+  flex:none;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
 .dr-type-caret{display:inline-block;width:7px;height:14px;background:var(--accent);
   vertical-align:-2px;margin-left:2px;animation:drcaret 1s step-end infinite}
 @keyframes drfadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
@@ -940,16 +945,18 @@ td .dr-conflict{padding:0 5px 1px;font-size:9.5px}
 }
 @keyframes tools-pulse{0%,100%{opacity:1}50%{opacity:.6}}
 
-/* ─── Citations [N] и SourcesPanel ─────────────────────────────────────── */
-.cite{
+/* ─── Citations [N] (ТОЛЬКО quick-режим) ───────────────────────────────────
+   Заскоуплено под :not(.chat-bubble-deep): иначе этот поздний pill-стиль
+   перебивал editorial-superscript .cite (строки 275-289) в deep-отчёте. */
+.chat-bubble:not(.chat-bubble-deep) .cite{
   display:inline-block;font-size:.7em;font-weight:600;color:var(--accent,#2563eb);
   background:color-mix(in oklab,var(--accent,#2563eb),transparent 90%);
   padding:1px 6px;border-radius:6px;text-decoration:none;line-height:1.4;
   margin:0 2px;transition:background .12s,transform .12s;
   vertical-align:baseline;
 }
-.cite:hover{background:color-mix(in oklab,var(--accent,#2563eb),transparent 78%);transform:translateY(-1px)}
-.cite-anchor{color:var(--ink-3);background:color-mix(in oklab,var(--ink-3),transparent 90%)}
+.chat-bubble:not(.chat-bubble-deep) .cite:hover{background:color-mix(in oklab,var(--accent,#2563eb),transparent 78%);transform:translateY(-1px)}
+.chat-bubble:not(.chat-bubble-deep) .cite-anchor{color:var(--ink-3);background:color-mix(in oklab,var(--ink-3),transparent 90%)}
 .md-code{background:color-mix(in oklab,var(--ink),transparent 92%);padding:1px 5px;border-radius:4px;font-size:.88em;font-family:'JetBrains Mono',monospace}
 
 .src-panel{
