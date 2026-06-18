@@ -1,0 +1,54 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  AuditLens — публикация в Магазине приложений Облака УВА.
+#
+#  Postgres+pgvector — MANAGED (10.0.3.43:5432, схема auditlens) → здесь его НЕТ.
+#  Секреты (DATABASE_URL, LLM_API_KEY, …) → из Infisical в окружение, либо .env
+#  на доверенной VM вертикали (в образ .env НЕ попадает — см. .dockerignore).
+#
+#  Первый запуск (один раз накатить миграции против managed-PG):
+#      docker compose -f docker-compose.prod.yml run --rm app migrate
+#  Затем поднять сервис:
+#      docker compose -f docker-compose.prod.yml up -d --build
+#
+#  ОАИТ навешивает на сервис app: поддомен <app>.uva-advanced.ru + SSL + Authentik (OIDC).
+#  Подробности и чеклист предусловий — docs/DEPLOY_UVA.md.
+# ════════════════════════════════════════════════════════════════════════════
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: auditlens:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env                    # на VM вертикали; в образ не попадает
+        required: false               # при Infisical-инжекте env прямо в окружение файла может не быть
+    environment:
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      EMBEDDING_MODE: "api"           # эмбеддинги через Foundation Models (без torch)
+      SEARXNG_URL: "http://searxng:8080"
+      # CORS_ALLOW_ORIGINS: "https://auditlens.uva-advanced.ru"  # сузить за прокси
+      # RUN_MIGRATIONS_ON_START: "1"  # авто-накат миграций на старте (по умолчанию off)
+    depends_on:
+      - searxng
+    volumes:
+      - auditlens_workspace:/app/workspace   # выгрузки/raw/логи (или вынести в OBS)
+    ports:
+      # Наружу торчит ТОЛЬКО реверс-прокси ОАИТ. Биндим на loopback хоста —
+      # прокси ОАИТ проксирует сюда. (или подключите app в сеть прокси без ports.)
+      - "127.0.0.1:8000:8000"
+
+  searxng:
+    image: searxng/searxng:2026.6.17-4dfdc822c   # запиннено (= latest на 2026-06-18, тот же digest)
+    restart: unless-stopped
+    volumes:
+      - ./docker/searxng/settings.prod.yml:/etc/searxng/settings.yml:ro
+    environment:
+      INSTANCE_NAME: "auditlens-searxng"
+    expose:
+      - "8080"                        # только внутренняя сеть compose; наружу НЕ публикуем
+
+volumes:
+  auditlens_workspace:
+    name: auditlens_workspace

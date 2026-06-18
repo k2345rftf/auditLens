@@ -1,0 +1,37 @@
+# ── Секреты — НИКОГДА не должны попасть в образ ──────────────────────────────
+.env
+.env.local
+.env.*.local
+**/secrets/
+**/*.key
+
+# ── venv / git / Python-кэши (рекурсивно: иначе вложенные не матчатся) ────────
+.venv/
+venv/
+env/
+ENV/
+.git/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage*
+
+# ── Runtime-артефакты ────────────────────────────────────────────────────────
+workspace/
+*.log
+*.pdf
+
+# ── Dev / ad-hoc (не часть прод-образа) ──────────────────────────────────────
+ab_*.py
+diag_*.py
+tests/
+demo/
+node_modules/
+.claude/
+.vscode/
+.idea/
+.DS_Store
+docker-compose.override.yml

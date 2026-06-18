@@ -1,0 +1,35 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  SearXNG — ПРОД-конфиг для AuditLens (sidecar в docker-compose.prod.yml).
+#  Внутренний сервис: доступен ТОЛЬКО приложению по сети compose, наружу не торчит.
+#
+#  ⚠ КЛЮЧЕВОЕ: с IP дата-центра cloud.ru живут ТОЛЬКО bing + dogpile. Остальные
+#    движки (google/duckduckgo/brave/yandex/qwant/mojeek/startpage) отдают
+#    капчу/access-denied (эмпирически проверено) → оставляем только рабочие, иначе
+#    мёртвые движки только добавляют таймауты.
+#    Оператор site: приложение само вырезает и фильтрует по домену (web_search.py),
+#    поэтому спец-настроек под site: тут не нужно.
+# ════════════════════════════════════════════════════════════════════════════
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - dogpile
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  # Внутренний сервис → secret_key носит технический характер. Для гигиены
+  # замените на значение из Infisical при деплое.
+  secret_key: "auditlens-CHANGE-ME-internal-only"
+  limiter: false
+  image_proxy: false
+
+ui:
+  default_locale: ru
+
+search:
+  safe_search: 0
+  default_lang: ru
+  formats:
+    - html
+    - json        # JSON обязателен — приложение ходит в SearXNG по API
