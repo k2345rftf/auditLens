@@ -1063,7 +1063,7 @@ function CitationTooltip({source, anchor}){
   const estHeight = hasExcerpt ? 220 : 130;
   const above = r.top > estHeight + 20;
   const style = {
-    left: Math.min(window.innerWidth - 440, Math.max(12, r.left - 180)),
+    left: (()=>{const vw=window.innerWidth;const w=Math.min(300,vw-24);return Math.max(12,Math.min(vw-w-12,r.left-180));})(),
     top: above ? r.top - 10 - estHeight : r.bottom + 10,
   };
   const kindLabel = SOURCE_KIND_LABELS[source.source_kind] || source.source_kind || "—";
@@ -3014,6 +3014,7 @@ function Shell(){
   const[qualityCount,setQualityCount]=useState(0);
   const[hasCaptcha,setHasCaptcha]=useState(false);
   const[navOpen,setNavOpen]=useState(false);
+  useEffect(()=>{document.documentElement.classList.toggle("nav-lock",navOpen);return()=>document.documentElement.classList.remove("nav-lock");},[navOpen]);
 
   // Load banks for context + sidebar badges
   useEffect(()=>{

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>AuditLens — Bank Market Intelligence</title>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1078,28 +1078,81 @@ td .dr-conflict{padding:0 5px 1px;font-size:9.5px}
 ::-webkit-scrollbar-thumb{background:var(--hair-2);border-radius:5px;border:2px solid var(--paper)}
 ::-webkit-scrollbar-thumb:hover{background:var(--ink-4)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-/* ── Адаптив: рейл → выезжающий drawer + гамбургер, стек-сетки, скролл-таблицы ── */
-.rail-backdrop{position:fixed;inset:0;background:oklch(0% 0 0 / .42);z-index:55;animation:fade .18s ease both}
+/* ── Адаптив под мобильные: drawer-рейл, нативный чат, тач-таргеты, таблицы ──
+   Всё строго в @media(max-width:…) — десктоп (≥961px) не меняется. ── */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.rail-backdrop{position:fixed;inset:0;background:oklch(0% 0 0 / .42);z-index:55;animation:fade .18s ease both;-webkit-tap-highlight-color:transparent}
 @media(min-width:961px){.rail-backdrop{display:none}}
+
 @media(max-width:960px){
-  #app{grid-template-columns:1fr}
-  .rail{position:fixed;left:0;top:0;height:100dvh;width:min(84vw,300px);transform:translateX(-100%);transition:transform .22s ease;z-index:60;box-shadow:var(--shadow-2);overflow-y:auto}
+  #app{grid-template-columns:1fr;min-height:100dvh}
+  /* выезжающий drawer-рейл */
+  .rail{position:fixed;left:0;top:0;height:100dvh;width:min(86vw,320px);transform:translateX(-100%);transition:transform .22s ease;z-index:60;box-shadow:var(--shadow-2);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:18px 14px calc(14px + env(safe-area-inset-bottom))}
   .rail.open{transform:translateX(0)}
   .mobile-nav{display:flex !important}
-  .content{padding:20px 16px 56px}
-  .topbar{padding:0 14px;gap:12px}
-  .hero-metric .num{font-size:64px}
-  .chat-shell{grid-template-columns:1fr;height:auto}
-  .chat-side{display:none}
+  .nav-item{padding:11px 10px;font-size:14.5px;min-height:44px}
+  .user-chip{min-height:44px}
+  html.nav-lock,html.nav-lock body{overflow:hidden}
+  /* топбар */
+  .topbar{gap:10px;padding-left:max(14px,env(safe-area-inset-left));padding-right:max(14px,env(safe-area-inset-right))}
+  .topbar .crumb{min-width:0;flex:1;overflow:hidden}
+  .topbar .crumb b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .icon-btn{width:38px;height:38px}
+  .mobile-nav .icon-btn{width:42px;height:42px}
+  /* контент */
+  .content{padding:20px max(16px,env(safe-area-inset-right)) calc(48px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
   .desk-only{display:none !important}
-  .dr-doc-main table,.content table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  /* вкладки-категории переносятся, а не обрезаются */
+  .tab-row{flex-wrap:wrap;gap:6px}
+  .tab{height:36px}
+  /* анти-зум iOS: инпуты ≥16px */
+  .input,.select,.chat-textarea,input,textarea,select{font-size:16px}
+  .input,.select{height:40px}
+  /* таблицы: горизонтальный скролл, без липкой шапки */
+  .content table,.dr-doc-main table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .content thead th{position:static}
+  /* ── ЧАТ: нативный — лента скроллится, композер прибит к низу ── */
+  .content:has(.chat-shell){padding:0;max-width:none}
+  .chat-shell{grid-template-columns:1fr;height:calc(100dvh - var(--topbar));min-height:0}
+  .chat-feed{padding:14px 16px 12px;overscroll-behavior:contain}
+  .chat-msg{max-width:100%}
+  .chat-side{display:none}
+  .chat-input-wrap{position:sticky;bottom:0;z-index:10;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;border-top:1px solid var(--hair-2);background:var(--paper);gap:8px;align-items:flex-end;padding:8px max(12px,env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));box-shadow:0 -2px 10px color-mix(in oklab,var(--ink),transparent 94%)}
+  .chat-textarea{min-height:40px;max-height:120px;padding:9px 6px}
+  .deep-toggle{align-self:flex-end;flex:none;height:44px;padding:0 12px;font-size:12.5px;border-radius:8px}
+  .chat-input-wrap .btn.btn-primary{min-width:44px;height:44px;flex:none;padding:0;display:grid;place-items:center;align-self:flex-end}
+  /* Deep Research графики в одну колонку (380px-min распирал) */
+  .dr-charts-wrap{grid-template-columns:1fr;gap:14px}
 }
+
 @media(max-width:720px){
   .topbar .crumb-idx{display:none}
   .hero-metric .num{font-size:52px}
   .t-display{font-size:34px}
-  .chat-input-wrap{flex-wrap:wrap}
-  .deep-toggle{order:-1;flex-basis:100%;justify-content:center}
+  /* документ deep-research компактнее */
+  .dr-doc-main h1{font-size:24px;line-height:1.25}
+  .dr-doc-main h2{font-size:18px;margin:22px 0 6px;padding-top:12px}
+  .dr-doc-main h3{font-size:15.5px}
+  .dr-doc-main table{font-size:12.5px}
+  .dr-doc-main thead th,.dr-doc-main tbody td{padding:6px 8px}
+  .dr-trace-row{grid-template-columns:20px minmax(0,1fr) auto;gap:8px}
+  .dr-trace-tool{display:none}
+  .dr-agent-model{display:none}
+  .dr-agent-gap{flex-direction:column;align-items:stretch;gap:3px}
+  .dr-agent-gap-q{max-width:100%;margin-left:0;text-align:left;white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word}
+  .dr-think-head{min-height:44px}
+  .dr-doc-toolbar{flex-wrap:wrap;gap:8px 12px}
+  .cite-tooltip{width:auto;max-width:calc(100vw - 24px);box-sizing:border-box}
+}
+
+@media(max-width:480px){
+  .content{padding-top:16px}
+  .t-display{font-size:27px;line-height:1.08}
+  .hero-metric .num{font-size:46px}
+  .t-h{font-size:19px}
+  .dr-doc-main h1{font-size:22px}
+  .dr-doc-main h2{font-size:16.5px}
+  .topbar{gap:6px}
 }
 .mobile-nav{display:none;align-items:center;gap:8px}
 .row{display:grid;gap:18px}
