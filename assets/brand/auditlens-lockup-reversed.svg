@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 140" width="560" height="140" role="img" aria-label="AuditLens">
+  <defs>
+    
+  </defs>
+  <g transform="translate(22 22) scale(0.96)">
+    <path fill="#1F4DFF" d="M47.5 13 L59.5 13 L89.5 89 L75.5 89 Z"></path>
+    <path fill="#FAFAF8" fill-rule="evenodd" d="M47.5 13 L57.5 13 L83.5 89 L66.5 89 L58.5 67 L36.5 67 L27.5 89 L10.5 89 Z M47.5 36 L56.5 58 L38.5 58 Z"></path>
+  </g>
+  <text x="138" y="93" font-family="Archivo, &#39;Helvetica Neue&#39;, Arial, sans-serif" font-size="64" letter-spacing="-2">
+    <tspan fill="#FAFAF8" font-weight="600">Audit</tspan><tspan fill="#FAFAF8" font-weight="400" opacity="0.66">Lens</tspan>
+  </text>
+</svg>
