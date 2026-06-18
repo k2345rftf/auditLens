@@ -3036,7 +3036,10 @@ function Shell(){
     <div id="app">
       <aside className="rail">
         <div className="rail-brand">
-          <div className="rail-mark">A</div>
+          <svg className="rail-mark" viewBox="0 0 100 100" role="img" aria-label="AuditLens">
+            <path fill="#1F4DFF" d="M47.5 13 L59.5 13 L89.5 89 L75.5 89 Z"/>
+            <path fill="currentColor" fillRule="evenodd" d="M47.5 13 L57.5 13 L83.5 89 L66.5 89 L58.5 67 L36.5 67 L27.5 89 L10.5 89 Z M47.5 36 L56.5 58 L38.5 58 Z"/>
+          </svg>
           <div>
             <h1>AuditLens</h1>
             <small>v1.0 · Internal</small>

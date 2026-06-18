@@ -51,7 +51,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bank Audit Platform", docs_url=None, lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS: за реверс-прокси Облака УВА фронт и API на одном origin поддомена → CORS
+# обычно не нужен. Дефолт "*" сохраняет прежнее поведение (локалка); в проде задать
+# CORS_ALLOW_ORIGINS=https://<app>.uva-advanced.ru (через запятую), или "" чтобы выключить.
+_cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+if _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+    app.add_middleware(CORSMiddleware, allow_origins=_cors_origins,
+                       allow_methods=["*"], allow_headers=["*"])
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -752,6 +759,27 @@ async def ai_export_pdf(req: PdfExportRequest):
     fname = f"auditlens_{audit_id}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# ── health / readiness (для реверс-прокси и оркестратора контейнера) ─────────
+# Регистрируются ДО catch-all spa_fallback (/{full_path:path}), иначе тот
+# перехватил бы их и вернул 200+HTML (ложно-зелёный liveness).
+
+@app.get("/healthz")
+def healthz():
+    """Liveness — процесс жив. БД НЕ трогаем: контейнер 'живой' даже если PG лежит."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz():
+    """Readiness — готов обслуживать: проверяем коннект к БД (SELECT 1)."""
+    try:
+        with db.session() as s:
+            s.execute(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"db unavailable: {e}")
 
 
 # ── static (SPA) ─────────────────────────────────────────────────────────────
