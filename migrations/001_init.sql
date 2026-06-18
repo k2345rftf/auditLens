@@ -1,7 +1,16 @@
 -- Bank audit platform :: core schema
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- Идемпотентно (CREATE ... IF NOT EXISTS / guarded CREATE TYPE) — безопасно
+-- применять повторно (контейнерный entrypoint, managed-PG Облака УВА).
 
-CREATE TABLE bank (
+-- pgcrypto ставит суперюзер (в managed-PG роль приложения не суперюзер).
+-- Не валим миграцию, если прав нет — расширение должен поставить ОАИТ заранее.
+DO $$ BEGIN
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'pgcrypto: нет прав — должен установить суперюзер ОАИТ (CREATE EXTENSION pgcrypto)';
+END $$;
+
+CREATE TABLE IF NOT EXISTS bank (
   bank_id      BIGSERIAL PRIMARY KEY,
   slug         TEXT NOT NULL UNIQUE,           -- 'sberbank', 'vtb'
   name         TEXT NOT NULL,
@@ -10,15 +19,18 @@ CREATE TABLE bank (
   license_no   TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX bank_aliases_gin ON bank USING gin (aliases);
+CREATE INDEX IF NOT EXISTS bank_aliases_gin ON bank USING gin (aliases);
 
--- Категории продуктов как enum (расширяемо)
-CREATE TYPE product_category AS ENUM (
-  'deposit', 'credit', 'card_debit', 'card_credit',
-  'mortgage', 'auto_loan', 'metals', 'investment', 'insurance', 'other'
-);
+-- Категории продуктов как enum (расширяемо). Guarded — повторный прогон не падает.
+DO $$ BEGIN
+  CREATE TYPE product_category AS ENUM (
+    'deposit', 'credit', 'card_debit', 'card_credit',
+    'mortgage', 'auto_loan', 'metals', 'investment', 'insurance', 'other'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE source_page (
+CREATE TABLE IF NOT EXISTS source_page (
   source_page_id BIGSERIAL PRIMARY KEY,
   source         TEXT NOT NULL,                -- 'sravni_aggregator' | 'banki_reviews' ...
   url_norm       TEXT NOT NULL,
@@ -29,7 +41,7 @@ CREATE TABLE source_page (
   UNIQUE (source, url_norm)
 );
 
-CREATE TABLE extraction_run (
+CREATE TABLE IF NOT EXISTS extraction_run (
   run_id         BIGSERIAL PRIMARY KEY,
   source         TEXT NOT NULL,
   target_name    TEXT NOT NULL,
@@ -42,9 +54,9 @@ CREATE TABLE extraction_run (
   openclaw_job   TEXT,
   meta           JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-CREATE INDEX extraction_run_started ON extraction_run(started_at DESC);
+CREATE INDEX IF NOT EXISTS extraction_run_started ON extraction_run(started_at DESC);
 
-CREATE TABLE source_snapshot (
+CREATE TABLE IF NOT EXISTS source_snapshot (
   snapshot_id    BIGSERIAL PRIMARY KEY,
   source_page_id BIGINT NOT NULL REFERENCES source_page(source_page_id) ON DELETE CASCADE,
   run_id         BIGINT REFERENCES extraction_run(run_id),
@@ -55,9 +67,9 @@ CREATE TABLE source_snapshot (
   bytes          INT,
   UNIQUE (source_page_id, content_sha256)
 );
-CREATE INDEX snapshot_page_time ON source_snapshot(source_page_id, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS snapshot_page_time ON source_snapshot(source_page_id, fetched_at DESC);
 
-CREATE TABLE product_offer (
+CREATE TABLE IF NOT EXISTS product_offer (
   offer_id       BIGSERIAL PRIMARY KEY,
   bank_id        BIGINT NOT NULL REFERENCES bank(bank_id),
   category       product_category NOT NULL,
@@ -72,7 +84,7 @@ CREATE TABLE product_offer (
 );
 
 -- SCD2: историзация условий предложения
-CREATE TABLE product_terms (
+CREATE TABLE IF NOT EXISTS product_terms (
   terms_id       BIGSERIAL PRIMARY KEY,
   offer_id       BIGINT NOT NULL REFERENCES product_offer(offer_id) ON DELETE CASCADE,
   valid_from     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -95,11 +107,11 @@ CREATE TABLE product_terms (
   filter_context_id  BIGINT,                   -- ссылка на тот же source_page (если из агрегатора)
   digest         TEXT NOT NULL                 -- sha256 нормализованных полей для сравнения
 );
-CREATE INDEX terms_offer_current ON product_terms(offer_id) WHERE valid_to IS NULL;
-CREATE INDEX terms_offer_history ON product_terms(offer_id, valid_from DESC);
+CREATE INDEX IF NOT EXISTS terms_offer_current ON product_terms(offer_id) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS terms_offer_history ON product_terms(offer_id, valid_from DESC);
 
 -- search_result_set связывает один запуск агрегатора с найденными офферами
-CREATE TABLE search_result_set (
+CREATE TABLE IF NOT EXISTS search_result_set (
   set_id         BIGSERIAL PRIMARY KEY,
   run_id         BIGINT NOT NULL REFERENCES extraction_run(run_id),
   source_page_id BIGINT NOT NULL REFERENCES source_page(source_page_id),
@@ -109,7 +121,7 @@ CREATE TABLE search_result_set (
 );
 
 -- Лог изменений: что именно поменялось между двумя версиями terms
-CREATE TABLE change_history (
+CREATE TABLE IF NOT EXISTS change_history (
   change_id      BIGSERIAL PRIMARY KEY,
   offer_id       BIGINT NOT NULL REFERENCES product_offer(offer_id),
   prev_terms_id  BIGINT REFERENCES product_terms(terms_id),
@@ -117,9 +129,9 @@ CREATE TABLE change_history (
   changed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   diff           JSONB NOT NULL                -- {field: {from, to}}
 );
-CREATE INDEX change_history_offer ON change_history(offer_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS change_history_offer ON change_history(offer_id, changed_at DESC);
 
-CREATE TABLE quality_flag (
+CREATE TABLE IF NOT EXISTS quality_flag (
   flag_id        BIGSERIAL PRIMARY KEY,
   entity_type    TEXT NOT NULL,                -- 'offer'|'terms'|'review'|'snapshot'
   entity_id      BIGINT NOT NULL,
@@ -128,4 +140,4 @@ CREATE TABLE quality_flag (
   detail         JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX quality_flag_entity ON quality_flag(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS quality_flag_entity ON quality_flag(entity_type, entity_id);

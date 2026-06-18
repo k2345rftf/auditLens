@@ -1,7 +1,19 @@
 -- Migration 005: RAG foundation (knowledge layer for "Audit Studio")
 -- Pre-flight: pgvector extension enabled separately.
+--
+-- ВАЖНО (managed-PG Облака УВА): расширение vector ставит СУПЕРЮЗЕР ОАИТ —
+-- роль приложения не суперюзер. Поэтому: (1) CREATE EXTENSION обёрнут так,
+-- чтобы не валить миграцию при отсутствии прав; (2) сами вектор-объекты
+-- (document_chunk.embedding + HNSW) вынесены в migrations/ensure_vector.sql,
+-- который entrypoint применяет на КАЖДЫЙ `migrate` (НЕ журналируется) — поэтому
+-- они до-создаются автоматически после CREATE EXTENSION vector суперюзером
+-- (до этого момента — «vector-free» фаза).
 
-CREATE EXTENSION IF NOT EXISTS vector;
+DO $$ BEGIN
+  CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'vector: нет прав — расширение должен установить суперюзер ОАИТ (CREATE EXTENSION vector)';
+END $$;
 
 
 -- ── Trust layer ───────────────────────────────────────────────────────────────
@@ -47,7 +59,10 @@ CREATE TABLE IF NOT EXISTS bank_profile (
 -- ── Documents (raw + parsed) ──────────────────────────────────────────────────
 -- Документ — единица knowledge: HTML-страница, PDF, XLSX, PPT.
 -- Хранит чистый текст (для отображения и RAG-extract). Сырьё в workspace/raw.
-CREATE TYPE doc_type AS ENUM ('html','pdf','xlsx','pptx','docx','txt','json');
+DO $$ BEGIN
+  CREATE TYPE doc_type AS ENUM ('html','pdf','xlsx','pptx','docx','txt','json');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS document (
     document_id    SERIAL PRIMARY KEY,
@@ -83,14 +98,17 @@ CREATE TABLE IF NOT EXISTS document_chunk (
     text           TEXT NOT NULL,
     tokens         INT,
     headings_path  TEXT,                            -- breadcrumb для UI
-    embedding      vector(1024),
+    -- embedding vector(1024) добавляется УСЛОВНО ниже (только если pgvector
+    -- установлен суперюзером ОАИТ) — «vector-free» фаза, чтобы CREATE TABLE
+    -- проходил под ролью приложения (не суперюзер).
     UNIQUE(document_id, idx)
 );
--- HNSW индекс под cosine distance (масштабируется до миллионов chunk'ов)
-CREATE INDEX IF NOT EXISTS chunk_embedding_hnsw
-    ON document_chunk USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
 CREATE INDEX IF NOT EXISTS chunk_doc_idx ON document_chunk(document_id);
+
+-- Векторная колонка document_chunk.embedding + HNSW-индекс создаются ОТДЕЛЬНО,
+-- в migrations/ensure_vector.sql — entrypoint применяет его на КАЖДЫЙ прогон
+-- `migrate` (не журналируется), поэтому объекты до-создаются автоматически, как
+-- только суперюзер ОАИТ выполнит CREATE EXTENSION vector. См. docs/DEPLOY_UVA.md §5.
 
 
 -- ── Bank features (структурированные ответы) ─────────────────────────────────
