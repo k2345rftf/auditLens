@@ -27,6 +27,24 @@ const QUICK = [
   {eb:"04 · Динамика", t:"Покажи изменения условий за последние 7 дней — что выросло, что упало."},
 ];
 
+// Редакторский экран приветствия ИИ-аналитика (новый дизайн)
+function AiWelcome({onPick}){
+  return <div className="ai-welcome fade-in">
+    <div className="aw-eyebrow">ИИ-аналитик · AuditLens</div>
+    <h1 className="aw-title">Спросите об условиях<br/>банковского рынка</h1>
+    <p className="aw-lede">Сравнение тарифов, ставок и рисков по продуктам — с цитированием официальных источников и позицией Сбера. Для аудит-вывода включите <b>Deep&nbsp;Research</b>: планировщик, мульти-агентный сбор и проверка чисел.</p>
+    <div className="aw-cards">
+      {QUICK.map((s,i)=>(
+        <button key={i} className="aw-card" onClick={()=>onPick(s.t)}>
+          <span className="aw-card-eb">{s.eb}</span>
+          <span className="aw-card-t">{s.t}</span>
+        </button>
+      ))}
+    </div>
+    <div className="aw-conn">Подключено: <span>v_offer_current · v_review_topics · v_sber_vs_market</span> · глубина 30 дней</div>
+  </div>;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const pct  = (v,d=2) => v==null ? "—" : `${parseFloat(v).toFixed(d)}%`;
 const signed = (v,d=2) => { if(v==null)return "—"; const n=parseFloat(v); return(n>0?"+":"")+n.toFixed(d); };
@@ -2312,12 +2330,14 @@ function AIPage(){
     runSend(srcQuestion,forceDeep);
   };
 
-  return <div className="fade-in chat-shell">
+  const isEmpty = !msgs.some(m=>m.role==="user");
+  return <div className={"fade-in chat-shell"+(isEmpty?" is-welcome":"")}>
     {showKbd && <KbdHelp onClose={()=>setShowKbd(false)}/>}
     {hoverCite && hoverCite.source && <CitationTooltip source={hoverCite.source} anchor={hoverCite.anchor}/>}
     <div className="chat-stream">
       <div className="chat-feed" ref={feedRef}>
-        {msgs.map((m,i)=>{
+        {isEmpty && <AiWelcome onPick={send}/>}
+        {!isEmpty && msgs.map((m,i)=>{
           if(m.role==="clarify"){
             return <div key={i} className="chat-msg ai"><div className="chat-bubble chat-bubble-deep">
               <ClarifyCard msg={m} onSubmit={clarifySubmit} onSkip={clarifySkip}/>
@@ -2444,18 +2464,23 @@ function AIPage(){
         })}
       </div>
       <div className="chat-input-wrap">
-        <button className={`deep-toggle${deepMode?" deep-toggle-on":""}`}
-                onClick={()=>setDeepMode(!deepMode)}
-                title="Deep Research: planner → multi-step → verify → charts. Дольше (~60–120с), но даёт audit-grade отчёт с цитированием источников."
-                disabled={loading}>
-          Deep Research
-        </button>
-        <textarea ref={inputRef} className="chat-textarea" rows={1} placeholder={deepMode?"Опишите задачу для исследования…":"Спросите о рынке, ставках, рисках…"}
+        {deepMode && <div className="composer-accent"/>}
+        <textarea ref={inputRef} className="chat-textarea" rows={1}
+          placeholder={deepMode?"Опишите задачу для глубокого исследования…":"Спросите об условиях, ставках, рисках или позиции Сбера…"}
           value={q} onChange={e=>setQ(e.target.value)}
           onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}/>
-        <button className="btn btn-primary" disabled={!q.trim()||loading} onClick={()=>send()} aria-label="Отправить">
-          <Ic.send/>
-        </button>
+        <div className="composer-bar">
+          <div className="seg">
+            <button className={"seg-btn"+(!deepMode?" on":"")} onClick={()=>setDeepMode(false)} disabled={loading}>Быстрый</button>
+            <button className={"seg-btn"+(deepMode?" on":"")} onClick={()=>setDeepMode(true)} disabled={loading} title="Deep Research: планировщик → мульти-агент → проверка фактов"><span className="seg-dot"/>Deep Research</button>
+          </div>
+          <span className="composer-hint">{deepMode?"планировщик · мульти-агент · проверка фактов":"ответ из подключённых данных · ~5с"}</span>
+          <span className="composer-kbd">Enter ↵</span>
+          <button className={"composer-send"+(deepMode?" deep":"")} disabled={!q.trim()||loading} onClick={()=>send()} aria-label="Отправить">
+            {deepMode?"Запустить research":"Спросить"}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
       </div>
     </div>
     <aside className="chat-side">
