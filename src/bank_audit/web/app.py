@@ -157,23 +157,6 @@ def reviews_topics(bank_slug: Optional[str] = None):
         """, {"s": bank_slug})
     return q("SELECT bank_slug, bank_name, topic, n, avg_rating FROM v_review_topics ORDER BY n DESC")
 
-@app.get("/api/reviews/sentiment")
-def reviews_sentiment():
-    return q("SELECT * FROM v_review_sentiment_share ORDER BY total DESC")
-
-@app.get("/api/reviews/list")
-def reviews_list(bank_slug: Optional[str] = None, limit: int = 50):
-    extra = "AND b.slug = :s" if bank_slug else ""
-    return q(f"""
-        SELECT r.review_id, b.name bank_name, b.slug bank_slug, b.is_sber,
-               r.source, r.rating, r.title, left(r.text,400) text_short,
-               r.posted_at, rs.label sentiment, r.status
-          FROM review r JOIN bank b USING(bank_id)
-          LEFT JOIN review_sentiment rs USING(review_id)
-         WHERE 1=1 {extra}
-         ORDER BY r.posted_at DESC NULLS LAST LIMIT :l
-    """, {**({"s": bank_slug} if bank_slug else {}), "l": limit})
-
 
 # ── reviews dashboard (риск-радар поверх корпуса banki.ru ~390к) ────────────
 def _rd():
