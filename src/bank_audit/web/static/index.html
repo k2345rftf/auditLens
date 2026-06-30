@@ -1153,6 +1153,109 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .eyebrow-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .fade-in{animation:fade .25s ease both}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* ─── REVIEWS · риск-радар голоса клиента ─────────────────────────────────── */
+.rv{max-width:1080px}
+.rv-src{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-4);letter-spacing:.01em;margin-bottom:20px}
+.rv-up{color:var(--neg);font-weight:600}
+.rv-down{color:var(--pos);font-weight:600}
+.rv-flat{color:var(--ink-4)}
+.rv-card{background:var(--surface);border:1px solid var(--hair);border-radius:var(--r-lg);padding:18px 20px;box-shadow:var(--shadow-1)}
+.rv-ttl{font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:16px;letter-spacing:-.01em;color:var(--ink)}
+.rv-cap{font-size:11.5px;color:var(--ink-3);margin-top:2px;margin-bottom:14px;line-height:1.4}
+.rv-ct{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+
+/* filters */
+.rv-filters{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid var(--hair)}
+.rv-fl{display:flex;flex-direction:column;gap:5px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.rv-fl select{height:34px;min-width:150px;max-width:230px;padding:0 12px;border-radius:7px;border:1px solid var(--hair-2);background:var(--surface);font-size:13px;color:var(--ink);font-family:'Geist',sans-serif;cursor:pointer}
+.rv-fl select:hover{border-color:var(--ink-4)}
+.rv-fl select:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 3px color-mix(in oklab,var(--ink),transparent 88%)}
+.rv-chips{display:flex;gap:0;border:1px solid var(--hair-2);border-radius:7px;overflow:hidden;height:34px}
+.rv-chip{padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-3);background:var(--surface);border:none;border-right:1px solid var(--hair-2);cursor:pointer;transition:background .12s,color .12s}
+.rv-chip:last-child{border-right:none}
+.rv-chip:hover{background:var(--paper-2);color:var(--ink)}
+.rv-chip.on{background:var(--ink);color:var(--paper)}
+.rv-export{margin-left:auto;height:34px;padding:0 14px;border-radius:7px;border:1px solid var(--hair-2);background:var(--surface);font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-2);cursor:pointer;transition:background .12s,border-color .12s}
+.rv-export:hover:not(:disabled){background:var(--paper-2);border-color:var(--ink-4);color:var(--ink)}
+.rv-export:disabled{opacity:.4;cursor:default}
+
+/* KPI */
+.rv-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.rv-kpi{padding:15px 16px}
+.rv-kpi.rv-alert{border-color:color-mix(in oklab,var(--neg),transparent 55%);background:color-mix(in oklab,var(--neg),var(--surface) 94%)}
+.rv-kl{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px;display:flex;align-items:center;gap:6px;min-height:13px}
+.rv-kv{font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:30px;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--ink)}
+.rv-kv-sm{font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;line-height:1.1;letter-spacing:-.01em;color:var(--ink);min-height:30px;display:flex;align-items:center}
+.rv-ks{font-size:11px;color:var(--ink-3);margin-top:8px;line-height:1.35}
+
+/* trend bars */
+.rv-bars{display:flex;align-items:flex-end;gap:5px;height:130px;padding-top:8px}
+.rv-bcol{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;cursor:default}
+.rv-bar{width:100%;max-width:34px;background:var(--ink-4);border-radius:3px 3px 0 0;transition:background .12s;min-height:4px}
+.rv-bcol:hover .rv-bar{background:var(--ink-2)}
+.rv-bar.hot{background:var(--accent)}
+.rv-blab{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-4);margin-top:6px;white-space:nowrap}
+.rv-spike{margin-top:12px;font-size:11.5px;color:var(--accent);background:var(--accent-soft);border-radius:6px;padding:8px 11px;line-height:1.4}
+
+/* two-col */
+.rv-row2{display:grid;grid-template-columns:1.15fr .85fr;gap:12px;margin-bottom:14px}
+
+/* theme risk-map */
+.rv-trow{display:grid;grid-template-columns:1fr 120px 52px 56px;align-items:center;gap:12px;padding:9px 8px;border-radius:7px;cursor:pointer;transition:background .12s;border:1px solid transparent}
+.rv-trow:hover{background:var(--paper-2)}
+.rv-trow.sel{background:var(--accent-soft);border-color:color-mix(in oklab,var(--accent),transparent 65%)}
+.rv-tname{font-size:13px;color:var(--ink);display:flex;align-items:center;gap:8px;min-width:0}
+.rv-tag{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:2px 5px;border-radius:3px;white-space:nowrap;flex:none}
+.rv-tag.compliance{color:var(--neg);background:color-mix(in oklab,var(--neg),transparent 88%);border:1px solid color-mix(in oklab,var(--neg),transparent 72%)}
+.rv-tag.conduct{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 86%);border:1px solid color-mix(in oklab,var(--warn),transparent 70%)}
+.rv-tag.ops{color:var(--ink-3);background:var(--paper-2);border:1px solid var(--hair-2)}
+.rv-tbarw{height:7px;background:var(--paper-2);border-radius:4px;overflow:hidden}
+.rv-tbar{height:100%;background:var(--accent);border-radius:4px}
+.rv-tbar.n{background:var(--ink-4)}
+.rv-tn{font-size:12px;text-align:right;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.rv-ttr{font-family:'JetBrains Mono',monospace;font-size:11px;text-align:right}
+
+/* geo */
+.rv-grow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 4px}
+.rv-gcity{font-size:13px;color:var(--ink);display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.rv-gbar{height:6px;border-radius:3px;min-width:4px;max-width:100%}
+.rv-gn{font-size:11.5px;color:var(--ink-2);white-space:nowrap;text-align:right;flex:none;font-variant-numeric:tabular-nums}
+.rv-gp{color:var(--ink-4)}
+
+/* vs market */
+.rv-vrow{display:grid;grid-template-columns:140px 1fr 52px;align-items:center;gap:12px;padding:5px 0}
+.rv-vname{font-size:12.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rv-vname.t{color:var(--ink);font-weight:600}
+.rv-vbar{height:13px;background:var(--ink-4);border-radius:3px;min-width:3px}
+.rv-vbar.t{background:var(--accent)}
+.rv-vp{font-size:11.5px;color:var(--ink-2);text-align:right;font-variant-numeric:tabular-nums}
+
+/* feed */
+.rv-search{position:relative;display:flex;align-items:center;gap:8px;margin:6px 0 16px;padding:0 12px;height:40px;border:1px solid var(--hair-2);border-radius:9px;background:var(--paper-2);transition:border-color .12s,box-shadow .12s}
+.rv-search:focus-within{border-color:var(--ink);background:var(--surface);box-shadow:0 0 0 3px color-mix(in oklab,var(--ink),transparent 90%)}
+.rv-search>span:first-child{color:var(--ink-3);font-size:15px}
+.rv-search input{flex:1;border:none;background:transparent;font-size:13px;color:var(--ink);font-family:'Geist',sans-serif}
+.rv-search input:focus{outline:none}
+.rv-search input::placeholder{color:var(--ink-4)}
+.rv-rev{padding:14px 0;border-top:1px solid var(--hair)}
+.rv-rev:first-of-type{border-top:none}
+.rv-rh{display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-3);margin-bottom:8px}
+.rv-pill{padding:2px 7px;border-radius:3px;background:var(--paper-2);border:1px solid var(--hair-2);color:var(--ink-2);font-size:10px}
+.rv-rq{font-size:13.5px;line-height:1.55;color:var(--ink);font-family:'Source Serif 4',Georgia,serif}
+.rv-rf{display:flex;align-items:center;gap:14px;margin-top:9px}
+.rv-lnk{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);text-decoration:none}
+.rv-lnk:hover{text-decoration:underline}
+.rv-lnk2{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-3);cursor:pointer;transition:color .12s}
+.rv-lnk2:hover{color:var(--ink)}
+.rv-clear{color:var(--accent);cursor:pointer;font-family:'JetBrains Mono',monospace}
+.rv-clear:hover{text-decoration:underline}
+
+@media(max-width:920px){
+  .rv-kpis{grid-template-columns:repeat(2,1fr)}
+  .rv-row2{grid-template-columns:1fr}
+  .rv-trow{grid-template-columns:1fr 80px 44px 50px}
+}
 </style>
 </head>
 <body>

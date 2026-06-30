@@ -891,129 +891,213 @@ function SberPage(){
   </div>;
 }
 
-// ─── REVIEWS PAGE ─────────────────────────────────────────────────────────────
-function ReviewsPage(){
-  const banks=useBanks();
-  const[bankSlug,setBankSlug]=useState("");
-  const[sent,setSent]=useState("all");
-  const[topics,setTopics]=useState([]);
-  const[sentiment,setSentiment]=useState([]);
-  const[reviews,setReviews]=useState([]);
-  const[loading,setLoading]=useState(true);
-  const[rvLoading,setRvLoading]=useState(false);
+// ─── REVIEWS PAGE — риск-радар голоса клиента (корпус banki.ru ~390к) ─────────
+const RV_BANKS=["Сбербанк","ВТБ","Т-Банк","Альфа-Банк","Газпромбанк","Совкомбанк",
+  "Россельхозбанк","Почта Банк","Райффайзен Банк","Ак Барс Банк","Уралсиб","ОТП Банк",
+  "МТС Банк","ПСБ","Ozon Банк","Яндекс Банк","Московский кредитный банк (МКБ)",
+  "Росбанк","Банк «Открытие»","Хоум Банк"];
+const RV_PERIODS=[[90,"3 мес"],[180,"6 мес"],[365,"12 мес"]];
+const RV_RISK={compliance:"compliance",conduct:"conduct",ops:"ops"};
+const rvDelta=(d)=> d==null ? <span className="rv-flat">→</span>
+  : d>4 ? <span className="rv-up">↑ {d}%</span>
+  : d<-4 ? <span className="rv-down">↓ {Math.abs(d)}%</span>
+  : <span className="rv-flat">→ {d>=0?"+":""}{d}%</span>;
 
-  // Initial load: topics + sentiment
+function ReviewsPage(){
+  const[bank,setBank]=useState("Сбербанк");
+  const[bankList,setBankList]=useState(RV_BANKS);
+  const[product,setProduct]=useState("");
+  const[days,setDays]=useState(90);
+  const[theme,setTheme]=useState("");
+  const[q,setQ]=useState("");
+  const[qInput,setQInput]=useState("");
+  const[ov,setOv]=useState(null),[tr,setTr]=useState(null),[th,setTh]=useState(null);
+  const[vm,setVm]=useState(null),[ge,setGe]=useState(null),[prods,setProds]=useState([]);
+  const[feed,setFeed]=useState(null);
+  const[busy,setBusy]=useState(true),[feedBusy,setFeedBusy]=useState(false);
+  const[caseN,setCaseN]=useState(()=>{try{return JSON.parse(localStorage.getItem("al-case")||"[]").length;}catch{return 0;}});
+
+  const enc=encodeURIComponent;
+  const pq=()=>product?`&product=${enc(product)}`:"";
+
   useEffect(()=>{
-    Promise.all([
-      apiFetch("/api/reviews/topics"),
-      apiFetch("/api/reviews/sentiment"),
-    ]).then(([t,s])=>{
-      const topicMap={};
-      (t||[]).forEach(r=>{
-        if(!topicMap[r.topic])topicMap[r.topic]={topic:r.topic,n:0,total_r:0,total_n:0};
-        topicMap[r.topic].n+=parseInt(r.n)||0;
-        topicMap[r.topic].total_r+=(parseFloat(r.avg_rating)||0)*(parseInt(r.n)||0);
-        topicMap[r.topic].total_n+=parseInt(r.n)||0;
-      });
-      const agg=Object.values(topicMap).map(x=>({topic:x.topic,n:x.n,avg_rating:x.total_n>0?x.total_r/x.total_n:0})).sort((a,b)=>b.n-a.n);
-      setTopics(agg);
-      setSentiment(s||[]);
-      setLoading(false);
-    }).catch(()=>setLoading(false));
+    apiFetch("/api/reviews/banks").then(d=>{
+      if(d&&d.items&&d.items.length)setBankList(d.items.map(x=>x.bank));
+    }).catch(()=>{});
   },[]);
 
-  // Load reviews on filter change
   useEffect(()=>{
-    setRvLoading(true);
-    const qs=bankSlug?`?bank_slug=${bankSlug}&limit=50`:"?limit=50";
-    apiFetch(`/api/reviews/list${qs}`)
-      .then(d=>{setReviews(d||[]);setRvLoading(false);})
-      .catch(()=>setRvLoading(false));
-  },[bankSlug]);
+    setBusy(true);
+    Promise.all([
+      apiFetch(`/api/reviews/overview?bank=${enc(bank)}${pq()}&days=${days}`),
+      apiFetch(`/api/reviews/trend?bank=${enc(bank)}${pq()}`),
+      apiFetch(`/api/reviews/themes?bank=${enc(bank)}${pq()}`),
+      apiFetch(`/api/reviews/vs-market?bank=${enc(bank)}${pq()}&days=${days}`),
+      apiFetch(`/api/reviews/geo?bank=${enc(bank)}${pq()}`),
+    ]).then(([o,t,h,v,g])=>{setOv(o);setTr(t);setTh(h);setVm(v);setGe(g);setBusy(false);})
+      .catch(()=>setBusy(false));
+  },[bank,product,days]);
 
-  const filteredReviews=sent==="all"?reviews:reviews.filter(r=>r.sentiment===sent);
+  useEffect(()=>{ setProduct("");
+    apiFetch(`/api/reviews/products?bank=${enc(bank)}`).then(d=>setProds(d.items||[])).catch(()=>setProds([]));
+  },[bank]);
 
-  return <div className="fade-in">
-    <header style={{marginBottom:24}}>
-      <div className="eyebrow" style={{marginBottom:6}}>§ Отзывы · {rvLoading?"…":filteredReviews.length} записей</div>
-      <h1 className="t-h" style={{marginBottom:6}}>Голос клиента и темы жалоб</h1>
-      <p className="t-cap" style={{maxWidth:"68ch"}}>
-        Тональность размечена по словарям. Темы извлекаются по ключевым словам.
-      </p>
-    </header>
+  useEffect(()=>{ setFeedBusy(true);
+    const tq=theme?`&theme=${theme}`:"", qq=q?`&q=${enc(q)}`:"";
+    apiFetch(`/api/reviews/feed?bank=${enc(bank)}${pq()}${tq}${qq}&limit=20`)
+      .then(d=>{setFeed(d.items||[]);setFeedBusy(false);}).catch(()=>{setFeed([]);setFeedBusy(false);});
+  },[bank,product,theme,q]);
 
-    <div className="filter-row">
-      <select className="select" value={bankSlug} onChange={e=>setBankSlug(e.target.value)}>
-        <option value="">Все банки</option>
-        {banks.map(b=><option key={b.slug} value={b.slug}>{b.name}</option>)}
-      </select>
-      <div className="tab-row">
-        {[["all","Все"],["neg","Негатив"],["neu","Нейтрально"],["pos","Позитив"]].map(([k,l])=>(
-          <button key={k} className={`tab ${sent===k?"active":""}`} onClick={()=>setSent(k)}>{l}</button>
+  const addCase=(r)=>{try{const k="al-case";const cur=JSON.parse(localStorage.getItem(k)||"[]");
+    if(!cur.find(x=>x.url===r.url)){cur.push({bank:r.bank,product:r.product,date:r.date,city:r.city,url:r.url,text:r.text});
+      localStorage.setItem(k,JSON.stringify(cur));setCaseN(cur.length);}}catch{}};
+  const exportCase=()=>{try{const cur=JSON.parse(localStorage.getItem("al-case")||"[]");
+    if(!cur.length)return;
+    const esc=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
+    const rows=[["банк","продукт","дата","город","ссылка","текст"].map(esc).join(",")]
+      .concat(cur.map(r=>[r.bank,r.product,r.date,r.city,r.url,r.text].map(esc).join(",")));
+    const blob=new Blob(["﻿"+rows.join("\n")],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`audit-case-${Date.now().toString(36)}.csv`;
+    document.body.appendChild(a);a.click();a.remove();}catch{}};
+
+  const themeLabel = theme && th ? (th.themes.find(x=>x.key===theme)||{}).label : "";
+  const trendMax = tr&&tr.series&&tr.series.length ? Math.max(...tr.series.map(s=>s.n)) : 1;
+  const thMax = th&&th.themes&&th.themes.length ? Math.max(...th.themes.map(t=>t.n)) : 1;
+  const vmMax = vm&&vm.rows&&vm.rows.length ? Math.max(...vm.rows.map(r=>r.pct)) : 1;
+  const geMax = ge&&ge.cities&&ge.cities.length ? Math.max(...ge.cities.map(c=>c.n)) : 1;
+
+  return <div className="fade-in rv">
+    <div className="eyebrow" style={{marginBottom:6}}>§ Отзывы · аудит-сигналы</div>
+    <h1 className="t-h" style={{marginBottom:4,fontFamily:"'Source Serif 4',Georgia,serif",fontWeight:600,letterSpacing:"-.015em"}}>Голос клиента — риск-радар</h1>
+    <div className="rv-src">banki.ru · ~390 тыс. жалоб (1–2★) · 217 банков · 2025–2026 · обновляется ежедневно</div>
+
+    <div className="rv-filters">
+      <label className="rv-fl">Банк
+        <select value={bank} onChange={e=>setBank(e.target.value)}>
+          {bankList.map(b=><option key={b} value={b}>{b}</option>)}
+        </select>
+      </label>
+      <label className="rv-fl">Продукт
+        <select value={product} onChange={e=>setProduct(e.target.value)}>
+          <option value="">Все продукты</option>
+          {prods.map(p=><option key={p.product} value={p.product}>{p.product} ({fmtNum(p.n)})</option>)}
+        </select>
+      </label>
+      <div className="rv-chips">
+        {RV_PERIODS.map(([d,l])=><button key={d} className={"rv-chip"+(days===d?" on":"")} onClick={()=>setDays(d)}>{l}</button>)}
+      </div>
+      <button className="rv-export" onClick={exportCase} disabled={!caseN}>↧ Аудит-дело{caseN?` · ${caseN}`:""}</button>
+    </div>
+
+    {/* KPI */}
+    <div className="rv-kpis">
+      <div className="rv-card rv-kpi">
+        <div className="rv-kl">Жалоб за {days} дн</div>
+        <div className="rv-kv">{busy||!ov?"…":fmtNum(ov.total)}</div>
+        <div className="rv-ks">{ov&&ov.delta_pct!=null?<>{ov.delta_pct<0?<span className="rv-down">↓ {Math.abs(ov.delta_pct)}%</span>:<span className="rv-up">↑ {ov.delta_pct}%</span>} к пред. периоду</>:"—"}</div>
+      </div>
+      <div className="rv-card rv-kpi">
+        <div className="rv-kl">Доля рынка жалоб</div>
+        <div className="rv-kv">{busy||!ov?"…":`${String(ov.market_share_pct).replace(".",",")}%`}</div>
+        <div className="rv-ks">{ov&&ov.market_rank?`${ov.market_rank}-е место · ⓘ без нормировки на базу`:"—"}</div>
+      </div>
+      <div className={"rv-card rv-kpi"+(ov&&ov.escalation_pct>=12?" rv-alert":"")}>
+        <div className="rv-kl">Регуляторная эскалация {ov&&ov.escalation_pct>=12&&<span className="rv-tag compliance">риск</span>}</div>
+        <div className="rv-kv rv-up">{busy||!ov?"…":`${String(ov.escalation_pct).replace(".",",")}%`}</div>
+        <div className="rv-ks">упоминают ЦБ / суд / ФАС</div>
+      </div>
+      <div className="rv-card rv-kpi">
+        <div className="rv-kl">Главная тема</div>
+        <div className="rv-kv-sm">{busy||!th||!th.themes.length?"…":th.themes[0].label}</div>
+        <div className="rv-ks">{th&&th.themes.length?`${String(th.themes[0].pct).replace(".",",")}% жалоб · ${RV_RISK[th.themes[0].risk]}`:""}</div>
+      </div>
+    </div>
+
+    {/* TREND */}
+    <div className="rv-card" style={{marginBottom:14}}>
+      <div className="rv-ct"><div><div className="rv-ttl">Динамика жалоб</div><div className="rv-cap">помесячно · {bank}{product?` · ${product}`:""}</div></div></div>
+      {busy||!tr?<Skel h={150}/>:<>
+        <div className="rv-bars">
+          {tr.series.map((s,i)=><div key={i} className="rv-bcol" title={`${s.ym}: ${fmtNum(s.n)}`}>
+            <div className={"rv-bar"+(s.spike?" hot":"")} style={{height:Math.max(4,Math.round(s.n/trendMax*100))+"%"}}/>
+            <div className="rv-blab">{s.ym.slice(2).replace("-",".")}</div>
+          </div>)}
+        </div>
+        {(()=>{const sp=tr.series.filter(s=>s.spike);return sp.length?<div className="rv-spike">⚠ пик {sp.map(s=>s.ym).join(", ")} — рост к среднему, повод проверить, что менялось</div>:null;})()}
+      </>}
+    </div>
+
+    {/* THEMES + GEO */}
+    <div className="rv-row2">
+      <div className="rv-card">
+        <div className="rv-ttl">Темы жалоб — риск-карта</div>
+        <div className="rv-cap">доля от жалоб за 90 дн · momentum к пред. кварталу · клик → лента темы</div>
+        {busy||!th?<Skel h={220}/>:th.themes.map(t=>(
+          <div key={t.key} className={"rv-trow"+(theme===t.key?" sel":"")} onClick={()=>setTheme(theme===t.key?"":t.key)}>
+            <div className="rv-tname">{t.label}<span className={"rv-tag "+t.risk}>{RV_RISK[t.risk]}</span></div>
+            <div className="rv-tbarw"><div className={"rv-tbar"+(t.risk!=="ops"?"":" n")} style={{width:Math.round(t.n/thMax*100)+"%"}}/></div>
+            <div className="rv-tn mono">{fmtNum(t.n)}</div>
+            <div className="rv-ttr">{rvDelta(t.delta_pct)}</div>
+          </div>
+        ))}
+      </div>
+      <div className="rv-card">
+        <div className="rv-ttl">География</div>
+        <div className="rv-cap">города · per-capita аномалии (12 мес)</div>
+        {busy||!ge?<Skel h={220}/>:ge.cities.map((c,i)=>(
+          <div key={i} className="rv-grow">
+            <div style={{minWidth:0}}>
+              <div className="rv-gcity">{c.city}{c.anomaly&&<span className="rv-tag conduct">аномалия</span>}</div>
+              <div className="rv-gbar" style={{width:Math.round(c.n/geMax*100)+"%",background:c.anomaly?"var(--accent)":"var(--ink-4)"}}/>
+            </div>
+            <div className="mono rv-gn">{fmtNum(c.n)}{c.per_100k?<span className="rv-gp"> · {c.per_100k}/100k</span>:""}</div>
+          </div>
         ))}
       </div>
     </div>
 
-    {!loading&&<div className="row row-2" style={{marginBottom:28}}>
-      <div className="surface" style={{padding:22}}>
-        <div className="eyebrow" style={{marginBottom:14}}>Темы жалоб (все банки)</div>
-        {!topics.length?<div style={{color:"var(--ink-3)",fontSize:13}}>Нет данных</div>:
-        <HBars
-          rows={topics.slice(0,8).map(t=>({
-            label:TL(t.topic),value:t.n,
-            color:t.avg_rating<2.5?"var(--accent)":"var(--ink-3)",
-          }))}
-          fmt={v=>fmtNum(v)}
-        />}
-      </div>
-      <div className="surface" style={{padding:22}}>
-        <div className="eyebrow" style={{marginBottom:14}}>Тональность по банкам</div>
-        {!sentiment.length?<div style={{color:"var(--ink-3)",fontSize:13}}>Нет данных</div>:
-        <table className="m-cards" style={{margin:"-4px"}}>
-          <thead><tr><th>Банк</th><th className="right">Негатив %</th><th className="right">Всего</th></tr></thead>
-          <tbody>
-            {sentiment.slice(0,8).map((s,i)=>{
-              const negPct=s.neg_pct!=null?Math.round(parseFloat(s.neg_pct)):null;
-              return <tr key={i}>
-                <td className="m-primary" style={{fontWeight:500}}>{s.bank_name||s.name||"—"}</td>
-                <td className="right" data-label="Негатив %">
-                  {negPct!=null?<span className={`badge ${negPct>40?"neg":negPct>25?"warn":"pos"}`}>{negPct}%</span>:<span className="mono" style={{color:"var(--ink-4)"}}>—</span>}
-                </td>
-                <td className="right mono tnum" data-label="Всего" style={{color:"var(--ink-3)"}}>{fmtNum(s.total||s.total_reviews)}</td>
-              </tr>;
-            })}
-          </tbody>
-        </table>}
-      </div>
-    </div>}
+    {/* VS MARKET */}
+    <div className="rv-card" style={{marginBottom:14}}>
+      <div className="rv-ttl">{bank} против рынка</div>
+      <div className="rv-cap">доля в общем потоке жалоб banki.ru · {days} дн{product?` · ${product}`:""}</div>
+      {busy||!vm?<Skel h={120}/>:vm.rows.map((r,i)=>(
+        <div key={i} className="rv-vrow">
+          <div className={"rv-vname"+(r.is_target?" t":"")}>{r.bank}</div>
+          <div className={"rv-vbar"+(r.is_target?" t":"")} style={{width:Math.round(r.pct/vmMax*100)+"%"}}/>
+          <div className="rv-vp mono">{String(r.pct).replace(".",",")}%</div>
+        </div>
+      ))}
+    </div>
 
-    <div className="surface" style={{padding:"20px 28px"}}>
-      <div className="eyebrow" style={{marginBottom:6}}>Лента отзывов</div>
-      {rvLoading?<div style={{paddingTop:16}}><Skel h={80}/><div style={{height:8}}/><Skel h={80}/></div>:
-       filteredReviews.length===0?<EmptyState text="Нет отзывов по выбранным фильтрам"/>:
-       filteredReviews.map(r=>{
-         const rating=Math.round(parseFloat(r.rating)||0);
-         const isSber=!!r.is_sber;
-         return <article key={r.review_id} className="review">
-           <div className="review-head">
-             <BankAvatar slug={r.bank_slug} name={r.bank_name} isSber={isSber}/>
-             <div style={{fontWeight:500}}>{r.bank_name||r.bank_slug}</div>
-             <span className={`badge ${r.sentiment==="neg"?"neg":r.sentiment==="pos"?"pos":""}`}>
-               <span className="dot"/>
-               {r.sentiment==="neg"?"негатив":r.sentiment==="pos"?"позитив":"нейтрально"}
-             </span>
-             {r.source&&<span className="badge">{r.source}</span>}
-             <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-               {[1,2,3,4,5].map(i=>(
-                 <span key={i} style={{width:8,height:8,borderRadius:1,background:i<=rating?"var(--ink)":"var(--hair-2)"}}/>
-               ))}
-             </div>
-           </div>
-           {r.title&&<div style={{fontWeight:500,fontSize:14.5,marginBottom:6}}>{r.title}</div>}
-           <p className="review-text">{r.text_short||r.text}</p>
-           <div className="review-meta">{fmtDate(r.posted_at)}</div>
-         </article>;
-       })}
+    {/* FEED */}
+    <div className="rv-card">
+      <div className="rv-ct">
+        <div><div className="rv-ttl">Лента — доказательная база</div>
+          <div className="rv-cap">{theme?<>тема: <b>{themeLabel}</b> · <span className="rv-clear" onClick={()=>setTheme("")}>сбросить ✕</span></>:"реальные жалобы с датами и ссылками · фильтр = выбранные банк/продукт/тема"}</div></div>
+      </div>
+      <div className="rv-search">
+        <span>⌕</span>
+        <input value={qInput} onChange={e=>setQInput(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")setQ(qInput.trim());}}
+          placeholder="Найти жалобы по смыслу: «не зачисляют выручку по эквайрингу», «навязали страховку»… (Enter)"/>
+        {q&&<span className="rv-clear" onClick={()=>{setQ("");setQInput("");}}>✕</span>}
+      </div>
+      {feedBusy?<><Skel h={70}/><div style={{height:8}}/><Skel h={70}/></>:
+       !feed||!feed.length?<EmptyState text="Нет жалоб по выбранным фильтрам — попробуйте другой банк/продукт/тему."/>:
+       feed.map((r,i)=>(
+        <div key={i} className="rv-rev">
+          <div className="rv-rh">
+            <span>{r.date}</span>
+            {r.product&&<span className="rv-pill">{r.product}</span>}
+            {r.city&&<span className="rv-pill">{r.city}</span>}
+          </div>
+          <div className="rv-rq">{(r.text||"").slice(0,420)}{(r.text||"").length>420?"…":""}</div>
+          <div className="rv-rf">
+            {r.url&&<a href={r.url} target="_blank" rel="noopener noreferrer" className="rv-lnk">banki.ru ↗</a>}
+            <span className="rv-lnk2" onClick={()=>addCase(r)}>＋ в аудит-дело</span>
+          </div>
+        </div>
+       ))}
     </div>
   </div>;
 }
