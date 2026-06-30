@@ -1233,7 +1233,7 @@ function ReviewsPage(){
       <button className="rv-explain-btn" onClick={runExplain} disabled={explainBusy}>
         {explainBusy?"Анализирую жалобы…":"✦ Объяснить причину (LLM)"}
       </button>
-      {explain&&explain!=="__none__"&&<div className="rv-explain">{explain}</div>}
+      {explain&&explain!=="__none__"&&<div className="rv-explain">{renderMD(explain)}</div>}
       {explain==="__none__"&&<div className="rv-explain rv-explain-err">Не удалось получить объяснение (LLM недоступен). Жалобы ниже — для ручного разбора.</div>}
       <div style={{marginTop:6}}>
         {drillBusy?<><Skel h={70}/><div style={{height:8}}/><Skel h={70}/></>:

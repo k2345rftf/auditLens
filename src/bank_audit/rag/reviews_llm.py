@@ -60,29 +60,33 @@ async def explain_segment(seg: dict, *, label: str) -> str | None:
 
 
 # ── LLM-классификация показанных отзывов (on-demand, по кнопке) ──────────────
+# Гибкий подход: LLM сам формулирует КОНКРЕТНУЮ тему обращения (free-form, не из
+# фикс. списка) — ловит «Блокировка по 161-ФЗ», «Карта СВОи», «Навязанная страховка
+# по ипотеке» и т.п., что хардкод-таксономия пропускает. risk-класс — для цвета.
 _CLS_SYSTEM = (
-    "Ты классифицируешь жалобы клиентов банка по фиксированной таксономии тем для "
-    "внутреннего аудита. Учитывай СМЫСЛ и отрицания: «не навязывали страховку» — это "
-    "НЕ тема навязывания; «спасибо, разблокировали» — не блокировка. Если ни одна тема "
-    "не подходит — пиши other. Не выдумывай темы вне списка."
+    "Ты — аналитик внутреннего аудита банка. Для каждой жалобы клиента сформулируй "
+    "КОНКРЕТНУЮ суть обращения короткой темой (2–5 слов: продукт + проблема, при "
+    "наличии — закон/норматив). Учитывай смысл и отрицания: «не навязывали» — НЕ "
+    "навязывание; «спасибо, разблокировали» — не блокировка. Не обобщай до «обслуживание»."
 )
+_RISKS = ("compliance", "conduct", "ops")
 
 
 async def classify_reviews(items: list[dict]) -> list[dict | None]:
-    """LLM-классификация ~20 показанных отзывов в фикс. таксономию (on-demand).
-    Возвращает список по индексам: {themes:[{key,label,short,risk}]} или None
-    (None → вызывающий оставит regex-темы как fallback)."""
-    from .reviews_dash import THEMES, theme_obj
-    texts = [(it.get("text") or "")[:500] for it in items]
+    """On-demand LLM-классификация ~20 показанных отзывов в КОНКРЕТНЫЕ темы (free-form).
+    Возвращает по индексам {themes:[{short,label,risk}]} или None (None → regex-fallback)."""
+    texts = [(it.get("text") or "")[:600] for it in items]
     if not texts:
         return []
-    enum = "\n".join(f'- {t["key"]}: {t["label"]}' for t in THEMES)
-    listing = "\n".join(f'#{i+1}: {t}' for i, t in enumerate(texts))
+    listing = "\n".join(f"#{i+1}: {t}" for i, t in enumerate(texts))
     user = (
-        f"Темы (ключи):\n{enum}\n- other: ничего из списка не подходит\n\n"
-        "Для КАЖДОЙ жалобы выбери 1–3 ключа тем (через запятую). Формат СТРОГО по "
-        "одной строке на жалобу, без пояснений:\n<номер>: <key>,<key>\n"
-        "Пример:\n3: blocking,escalation\n\n"
+        "Для КАЖДОЙ жалобы дай: (1) конкретную тему (2–5 слов, напр. «Блокировка по "
+        "161-ФЗ», «Навязанная страховка по кредиту», «Карта СВОи: отказ», «Двойное "
+        "списание по СБП», «Сбой в приложении»); (2) risk-класс: compliance "
+        "(регуляторика/закон/ЦБ/суд), conduct (недобросовестные практики к клиенту), "
+        "ops (операционные сбои/сервис).\n"
+        "Формат СТРОГО по одной строке на жалобу, без лишнего:\n<номер> | <тема> | <risk>\n"
+        "Пример:\n3 | Блокировка по 161-ФЗ | compliance\n\n"
         f"Жалобы:\n{listing}"
     )
     out: list[dict | None] = [None] * len(texts)
@@ -91,19 +95,22 @@ async def classify_reviews(items: list[dict]) -> list[dict | None]:
             model=fast_model(),
             messages=[{"role": "system", "content": _CLS_SYSTEM},
                       {"role": "user", "content": user}],
-            temperature=0.0, max_tokens=1600)
+            temperature=0.0, max_tokens=2000)
         content = resp.choices[0].message.content or ""
     except Exception as e:  # noqa: BLE001
         log.warning("reviews_llm.classify_reviews упал: %s", e)
         return out
-    valid = {t["key"] for t in THEMES}
     for line in content.splitlines():
-        m = re.match(r"\s*#?(\d+)", line)
+        m = re.match(r"\s*#?(\d+)\s*[|:.\)]\s*(.+)", line)
         if not m:
             continue
         idx = int(m.group(1)) - 1
         if not (0 <= idx < len(texts)):
             continue
-        keys = [k for k in valid if re.search(r"\b" + re.escape(k) + r"\b", line)]
-        out[idx] = {"themes": [theme_obj(k) for k in keys if theme_obj(k)]}
+        rest = m.group(2).strip()
+        risk = next((rc for rc in _RISKS if rc in rest.lower()), "other")
+        topic = rest.split("|")[0].strip()
+        topic = re.sub(r"[|\-—:]+\s*(compliance|conduct|ops)\b.*$", "", topic, flags=re.I).strip(" .—-|:")
+        if topic:
+            out[idx] = {"themes": [{"short": topic[:46], "label": topic, "risk": risk}]}
     return out
