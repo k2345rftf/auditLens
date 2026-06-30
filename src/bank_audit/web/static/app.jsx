@@ -933,13 +933,22 @@ function RvModal({onClose,title,sub,side,children}){
     </div>, document.body);
 }
 
+// Чипы тем обращения (классификация): regex-baseline или LLM-уточнённые.
+function RvThemes({list,src}){
+  if(!list||!list.length) return <span className="rv-tag other">Прочее</span>;
+  return <>{list.slice(0,3).map((t,j)=>(
+    <span key={j} className={"rv-tag "+(t.risk||"other")} title={t.label}>{t.short||t.label}</span>
+  ))}{src==="llm"&&<span className="rv-llm" title="темы уточнены ИИ">✦</span>}</>;
+}
+
 // Карточка отзыва (переиспользуется в ленте, в модале и в драуэре).
 function RvReview({r,onOpen,full}){
   const txt=r.text||"";
   return <div className="rv-rev">
     <div className="rv-rh">
       <span>{r.date}</span>
-      {r.product&&<span className="rv-pill">{r.product}</span>}
+      <RvThemes list={r.themes} src={r.theme_src}/>
+      {r.product&&<span className="rv-pill rv-pill-dim" title="направление banki.ru">{r.product}</span>}
       {r.city&&<span className="rv-pill">{r.city}</span>}
       {r.similar>0&&<span className="rv-sim">+{r.similar} похожих</span>}
     </div>
@@ -969,6 +978,7 @@ function ReviewsPage(){
   const[drill,setDrill]=useState(null);                  // {type:'city'|'month',value,label}
   const[drillItems,setDrillItems]=useState(null),[drillBusy,setDrillBusy]=useState(false);
   const[explain,setExplain]=useState(null),[explainBusy,setExplainBusy]=useState(false);
+  const[clsBusy,setClsBusy]=useState(false),[clsOn,setClsOn]=useState(false);
 
   const enc=encodeURIComponent;
   const pq=()=>product?`&product=${enc(product)}`:"";
@@ -1014,11 +1024,20 @@ function ReviewsPage(){
     apiFetch(`/api/reviews/products?bank=${enc(bank)}`).then(d=>setProds(d.items||[])).catch(()=>setProds([]));
   },[bank]);
 
-  useEffect(()=>{ setFeedBusy(true);
+  useEffect(()=>{ setFeedBusy(true);setClsOn(false);
     const tq=theme?`&theme=${theme}`:"", qq=q?`&q=${enc(q)}`:"";
     apiFetch(`/api/reviews/feed?bank=${enc(bank)}${pq()}${tq}${qq}&limit=20`)
       .then(d=>{setFeed(d.items||[]);setFeedBusy(false);}).catch(()=>{setFeed([]);setFeedBusy(false);});
   },[bank,product,theme,q]);
+
+  // on-demand: уточнить темы показанных отзывов через LLM (по кнопке)
+  const classifyFeed=()=>{
+    setClsBusy(true);
+    const tq=theme?`&theme=${theme}`:"", qq=q?`&q=${enc(q)}`:"";
+    apiFetch(`/api/reviews/feed-classified?bank=${enc(bank)}${pq()}${tq}${qq}&limit=20`)
+      .then(d=>{if(d&&d.items)setFeed(d.items);setClsOn(!!(d&&d.llm));setClsBusy(false);})
+      .catch(()=>setClsBusy(false));
+  };
 
   const addCase=(r)=>{try{const k="al-case";const cur=JSON.parse(localStorage.getItem(k)||"[]");
     if(!cur.find(x=>x.url===r.url)){cur.push({bank:r.bank,product:r.product,date:r.date,city:r.city,url:r.url,text:r.text});
@@ -1108,17 +1127,19 @@ function ReviewsPage(){
         {/* THEMES */}
         <div className="rv-card">
           <div className="rv-ttl">Темы жалоб — риск-карта</div>
-          <div className="rv-cap">доля от жалоб за 90 дн · momentum к пред. кварталу · клик → лента темы</div>
-          {busy?<Skel h={220}/>:!th||!th.themes||!th.themes.length?<RvNote err={th&&th.__err}/>:th.themes.map(t=>(
-            <div key={t.key} className={"rv-trow"+(theme===t.key?" sel":"")} role="button" tabIndex={0}
-                 aria-pressed={theme===t.key} onClick={()=>setTheme(theme===t.key?"":t.key)}
-                 onKeyDown={onKey(()=>setTheme(theme===t.key?"":t.key))}>
-              <div className="rv-tname">{t.label}<span className={"rv-tag "+t.risk}>{RV_RISK[t.risk]}</span></div>
-              <div className="rv-tbarw"><div className={"rv-tbar"+(t.risk!=="ops"?"":" n")} style={{width:Math.round(t.n/thMax*100)+"%"}}/></div>
+          <div className="rv-cap">доля от жалоб за 90 дн · мультилейбл (сумма ≠ 100%) · клик → лента темы</div>
+          {busy?<Skel h={220}/>:!th||!th.themes||!th.themes.length?<RvNote err={th&&th.__err}/>:th.themes.map(t=>{
+            const clk=t.key!=="other", risky=t.risk==="compliance"||t.risk==="conduct";
+            return <div key={t.key} className={"rv-trow"+(theme===t.key?" sel":"")+(clk?"":" rv-trow-static")}
+                 role={clk?"button":undefined} tabIndex={clk?0:undefined} aria-pressed={clk?(theme===t.key):undefined}
+                 onClick={clk?()=>setTheme(theme===t.key?"":t.key):undefined}
+                 onKeyDown={clk?onKey(()=>setTheme(theme===t.key?"":t.key)):undefined}>
+              <div className="rv-tname">{t.label}{RV_RISK[t.risk]&&<span className={"rv-tag "+t.risk}>{RV_RISK[t.risk]}</span>}</div>
+              <div className="rv-tbarw"><div className={"rv-tbar"+(risky?"":" n")} style={{width:Math.round(t.n/thMax*100)+"%"}}/></div>
               <div className="rv-tn mono">{fmtNum(t.n)}</div>
               <div className="rv-ttr">{rvDelta(t.delta_pct)}</div>
-            </div>
-          ))}
+            </div>;
+          })}
         </div>
       </div>
       <div className="rv-col">
@@ -1157,7 +1178,11 @@ function ReviewsPage(){
     <div className="rv-card">
       <div className="rv-ct">
         <div><div className="rv-ttl">Лента — доказательная база</div>
-          <div className="rv-cap">{theme?<>тема: <b>{themeLabel}</b> · <span className="rv-clear" role="button" tabIndex={0} onClick={()=>setTheme("")} onKeyDown={onKey(()=>setTheme(""))}>сбросить ✕</span></>:"реальные жалобы с датами и ссылками · фильтр = выбранные банк/продукт/тема"}</div></div>
+          <div className="rv-cap">{theme?<>тема: <b>{themeLabel}</b> · <span className="rv-clear" role="button" tabIndex={0} onClick={()=>setTheme("")} onKeyDown={onKey(()=>setTheme(""))}>сбросить ✕</span></>:"темы обращений определены автоматически (regex) · ✦ уточнить ИИ для точности"}</div></div>
+        <button className="rv-cls-btn" onClick={classifyFeed} disabled={clsBusy||feedBusy||!feed||!feed.length}
+                title="Переклассифицировать показанные отзывы с учётом смысла и отрицаний">
+          {clsBusy?"Уточняю…":clsOn?"✦ темы уточнены ИИ":"✦ Уточнить темы (ИИ)"}
+        </button>
       </div>
       <div className="rv-search">
         <span>⌕</span>
@@ -1172,7 +1197,8 @@ function ReviewsPage(){
         <div key={i} className="rv-rev">
           <div className="rv-rh">
             <span>{r.date}</span>
-            {r.product&&<span className="rv-pill">{r.product}</span>}
+            <RvThemes list={r.themes} src={r.theme_src}/>
+            {r.product&&<span className="rv-pill rv-pill-dim" title="направление banki.ru">{r.product}</span>}
             {r.city&&<span className="rv-pill">{r.city}</span>}
             {r.similar>0&&<span className="rv-sim">+{r.similar} похожих</span>}
           </div>
@@ -1190,7 +1216,10 @@ function ReviewsPage(){
     {/* МОДАЛ: полный текст обращения */}
     {modalRev&&<RvModal onClose={()=>setModalRev(null)} title="Обращение клиента"
         sub={[modalRev.date,modalRev.product,modalRev.city].filter(Boolean).join(" · ")}>
-      {modalRev.similar>0&&<div className="rv-sim" style={{marginBottom:10}}>+{modalRev.similar} похожих обращений (массовая жалоба)</div>}
+      <div className="rv-rh" style={{marginBottom:10}}>
+        <RvThemes list={modalRev.themes} src={modalRev.theme_src}/>
+        {modalRev.similar>0&&<span className="rv-sim">+{modalRev.similar} похожих (массовая жалоба)</span>}
+      </div>
       <div className="rv-modal-text">{modalRev.text}</div>
       <div className="rv-rf" style={{marginTop:16}}>
         {modalRev.url&&<a href={modalRev.url} target="_blank" rel="noopener noreferrer" className="rv-lnk">banki.ru ↗</a>}

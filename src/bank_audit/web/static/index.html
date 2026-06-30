@@ -1213,6 +1213,9 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .rv-tag.compliance{color:var(--neg);background:color-mix(in oklab,var(--neg),transparent 88%);border:1px solid color-mix(in oklab,var(--neg),transparent 72%)}
 .rv-tag.conduct{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 86%);border:1px solid color-mix(in oklab,var(--warn),transparent 70%)}
 .rv-tag.ops{color:var(--ink-3);background:var(--paper-2);border:1px solid var(--hair-2)}
+.rv-tag.other{color:var(--ink-4);background:var(--paper-2);border:1px dashed var(--hair-2)}
+.rv-trow-static{cursor:default;opacity:.72}
+.rv-trow-static:hover{background:transparent}
 .rv-tbarw{height:7px;background:var(--paper-2);border-radius:4px;overflow:hidden}
 .rv-tbar{height:100%;background:var(--accent);border-radius:4px}
 .rv-tbar.n{background:var(--ink-4)}
@@ -1263,6 +1266,11 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 
 /* массовость / клик-аффордансы ленты */
 .rv-sim{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);background:var(--accent-soft);border-radius:3px;padding:2px 6px}
+.rv-pill-dim{opacity:.65;font-size:9.5px}
+.rv-llm{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);margin-left:2px}
+.rv-cls-btn{flex:none;height:30px;padding:0 12px;border-radius:7px;border:1px solid color-mix(in oklab,var(--accent),transparent 55%);background:var(--accent-soft);color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .12s}
+.rv-cls-btn:hover:not(:disabled){background:color-mix(in oklab,var(--accent),transparent 80%)}
+.rv-cls-btn:disabled{opacity:.5;cursor:default}
 .rv-rq-click{cursor:pointer;border-radius:6px;transition:color .12s}
 .rv-rq-click:hover{color:var(--ink)}
 .rv-more{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);white-space:nowrap}
