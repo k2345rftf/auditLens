@@ -175,6 +175,51 @@ def reviews_list(bank_slug: Optional[str] = None, limit: int = 50):
     """, {**({"s": bank_slug} if bank_slug else {}), "l": limit})
 
 
+# ── reviews dashboard (риск-радар поверх корпуса banki.ru ~390к) ────────────
+def _rd():
+    from ..rag import reviews_dash
+    return reviews_dash
+
+@app.get("/api/reviews/banks")
+def reviews_banks():
+    return {"items": _rd().banks()}
+
+@app.get("/api/reviews/overview")
+def reviews_overview(bank: str = "Сбербанк", product: Optional[str] = None, days: int = 90):
+    return _rd().overview(bank, product or None, days) or {}
+
+@app.get("/api/reviews/trend")
+def reviews_trend(bank: str = "Сбербанк", product: Optional[str] = None):
+    return _rd().trend(bank, product or None) or {}
+
+@app.get("/api/reviews/themes")
+def reviews_themes(bank: str = "Сбербанк", product: Optional[str] = None):
+    return _rd().themes(bank, product or None) or {}
+
+@app.get("/api/reviews/vs-market")
+def reviews_vs_market(bank: str = "Сбербанк", product: Optional[str] = None, days: int = 90):
+    return _rd().vs_market(bank, product or None, days) or {}
+
+@app.get("/api/reviews/geo")
+def reviews_geo(bank: str = "Сбербанк", product: Optional[str] = None):
+    return _rd().geo(bank, product or None) or {}
+
+@app.get("/api/reviews/products")
+def reviews_products(bank: str = "Сбербанк"):
+    return _rd().products(bank) or {}
+
+@app.get("/api/reviews/theme-defs")
+def reviews_theme_defs():
+    from ..rag.reviews_dash import THEMES
+    return [{"key": t["key"], "label": t["label"], "risk": t["risk"]} for t in THEMES]
+
+@app.get("/api/reviews/feed")
+def reviews_feed(bank: str = "Сбербанк", product: Optional[str] = None,
+                 theme: Optional[str] = None, q: Optional[str] = None, limit: int = 20):
+    items = _rd().list_reviews(bank, product or None, theme or None, q or None, limit=limit)
+    return {"items": items, "count": len(items)}
+
+
 # ── banks & ratings ───────────────────────────────────────────────────────────
 
 @app.get("/api/banks")
