@@ -34,9 +34,14 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Фоновые циклы:
     #  • alerts_background_loop — раз в 30 мин quality_flag → email
+    #  • digest_background_loop — выпуск «Обзора» в 07:00 МСК (+catch-up)
+    #  • ingest_background_loop — автосбор тарифов в 05:00 МСК (+quality)
     # (cookie-warming убран: требовал Playwright, на сервере циклически падал)
+    from ..digest.scheduler import digest_background_loop, ingest_background_loop
     tasks = [
         asyncio.create_task(alerts_background_loop()),
+        asyncio.create_task(digest_background_loop()),
+        asyncio.create_task(ingest_background_loop()),
     ]
     try:
         yield
@@ -86,6 +91,67 @@ def summary():
         "last_run":  scalar("SELECT max(finished_at) FROM extraction_run WHERE status='ok'"),
         "categories": q("SELECT category, count(*) n FROM v_offer_current GROUP BY category ORDER BY n DESC"),
     }
+
+# ── дневной дайджест «Обзора» (утренний брифинг) ─────────────────────────────
+
+def _digest_today():
+    from ..digest.scheduler import _today_msk
+    return _today_msk()
+
+
+@app.get("/api/overview/digest")
+async def overview_digest(date: Optional[str] = None):
+    """Выпуск дня (или последний доступный ≤ сегодня). Без date при отсутствии
+    сегодняшнего выпуска lazy-запускает генерацию в фоне и СРАЗУ отдаёт вчерашний
+    с meta.refreshing=true — никогда не пустой экран и не 500."""
+    from ..digest import store as digest_store
+    from ..digest.scheduler import ensure_digest
+    today = _digest_today()
+    want = None
+    if date:
+        from datetime import date as _date
+        try:
+            want = _date.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(400, f"плохая дата: {date}")
+    doc = await asyncio.to_thread(digest_store.read_latest, today, want)
+    if date and doc["meta"]["empty"]:
+        raise HTTPException(404, f"дайджест за {date} не найден")
+    if not date and not doc["meta"]["refreshing"]:
+        # lazy catch-up и при ПОЛНОМ отсутствии выпуска, и при упавшем на середине
+        # прогоне (часть секций есть, но день не полон) — иначе висит до утра
+        from ..digest.pipeline import REQUIRED
+        complete = await asyncio.to_thread(digest_store.day_complete, today, REQUIRED)
+        if not complete:
+            asyncio.create_task(ensure_digest("lazy"))     # не ждём
+            doc["meta"]["refreshing"] = True
+    return doc
+
+
+@app.get("/api/overview/digest/dates")
+def overview_digest_dates():
+    from ..digest import store as digest_store
+    return {"dates": digest_store.list_dates()}
+
+
+class DigestRefreshRequest(BaseModel):
+    force: bool = True
+    sections: Optional[list[str]] = None
+
+
+@app.post("/api/overview/digest/refresh")
+async def overview_digest_refresh(req: DigestRefreshRequest):
+    """Ручной перезапуск (целиком или точечно: {"sections":["news","headline"]})."""
+    from ..digest import store as digest_store
+    from ..digest.scheduler import ensure_digest
+    if await asyncio.to_thread(digest_store.run_in_progress, _digest_today()):
+        raise HTTPException(409, "Дайджест уже генерируется")
+    asyncio.create_task(ensure_digest("manual", force=req.force,
+                                      sections=req.sections))
+    return Response(status_code=202,
+                    content=json.dumps({"started": True}),
+                    media_type="application/json")
+
 
 @app.get("/api/recent-changes")
 def recent_changes():

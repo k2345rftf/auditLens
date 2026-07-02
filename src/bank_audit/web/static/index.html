@@ -1388,6 +1388,122 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .rv-ovl{padding:0}
   .rv-ovl-card{width:100vw;max-height:100vh;border-radius:0;border:none}
 }
+
+/* ─── OVERVIEW · Утренний брифинг аудитора (bf-) ─────────────────────────────
+   Дневной выпуск: masthead с LLM-заголовком → пульс → карточки-инсайты +
+   новости → тарифные движения → подвал доверия. Слой изолирован (bf-),
+   всё на существующих переменных. */
+.bf-stamp{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-4)}
+.bf-refresh{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair-2);background:var(--surface);
+  border-radius:var(--r);padding:4px 10px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-3);
+  cursor:pointer;transition:color .12s,border-color .12s}
+.bf-refresh:hover{color:var(--ink);border-color:var(--ink-4)}
+.bf-refresh:disabled{opacity:.5;cursor:default}
+.bf-live{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-3)}
+.bf-live .dot{width:6px;height:6px;border-radius:50%;background:var(--warn);animation:pulse 1.6s ease infinite}
+
+/* пульс дня — детерминированный тикер, живёт без LLM */
+.bf-pulse{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--hair);
+  border-radius:var(--r-lg);background:var(--surface);overflow:hidden;box-shadow:var(--shadow-1)}
+.bf-pulse>a{display:block;padding:14px 18px 12px;border-left:1px solid var(--hair);text-decoration:none;color:inherit;
+  transition:background .12s;min-width:0}
+.bf-pulse>a:first-child{border-left:none}
+.bf-pulse>a:hover{background:var(--paper-2)}
+.bf-pulse-num{font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:24px;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;line-height:1.1;display:flex;align-items:baseline;gap:7px;white-space:nowrap}
+.bf-pulse-num .u{font-size:12px;color:var(--ink-3);font-family:'JetBrains Mono',monospace;font-weight:400}
+.bf-pulse-cap{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-4);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ядро: лента инсайтов + новостная колонка */
+.bf-core{display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:16px;align-items:start}
+.bf-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.bf-card{position:relative;background:var(--surface);border:1px solid var(--hair);border-radius:var(--r-lg);
+  padding:16px 18px 14px 20px;box-shadow:var(--shadow-1);display:flex;flex-direction:column;gap:9px;min-width:0;
+  animation:fade .25s ease both;animation-delay:calc(var(--i,0)*60ms)}
+.bf-card.lead{grid-column:1/-1}
+.bf-card::before{content:"";position:absolute;left:0;top:13px;bottom:13px;width:3px;border-radius:2px;
+  background:var(--sev,var(--ink-4))}
+.bf-card[data-sev=risk]{--sev:var(--neg)}
+.bf-card[data-sev=watch]{--sev:var(--warn)}
+.bf-card[data-sev=good]{--sev:var(--pos)}
+.bf-kicker{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--sev,var(--ink-3));display:flex;gap:8px;align-items:center}
+.bf-kicker .bf-glyph{margin-left:auto}
+.bf-title{font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:16.5px;line-height:1.32;letter-spacing:-.01em}
+.bf-card.lead .bf-title{font-size:20px}
+.bf-sowhat{font-size:12.5px;line-height:1.55;color:var(--ink-2)}
+.bf-viz{display:flex;align-items:center;gap:12px;min-height:22px;color:var(--ink-3)}
+.bf-prov{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bf-foot{display:flex;gap:8px;margin-top:auto;padding-top:10px;border-top:1px solid var(--hair)}
+.bf-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair-2);background:var(--surface);
+  border-radius:var(--r);padding:5px 11px;font-size:12px;color:var(--ink-2);cursor:pointer;
+  transition:color .12s,border-color .12s,background .12s;text-decoration:none}
+.bf-btn:hover{color:var(--ink);border-color:var(--ink-4)}
+.bf-btn.ai{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);
+  background:var(--accent-soft);border-color:color-mix(in oklab,var(--accent),transparent 70%)}
+.bf-btn.ai:hover{border-color:var(--accent)}
+.bf-quiet{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-family:'JetBrains Mono',monospace;
+  font-size:11px;color:var(--ink-3);padding:12px 4px 0}
+.bf-quiet .ok{display:inline-flex;color:var(--pos)}
+
+/* delta-стрип тарифного сигнала */
+.bf-delta{font-family:'JetBrains Mono',monospace;font-size:13px;font-variant-numeric:tabular-nums;
+  display:inline-flex;align-items:center;gap:7px}
+.bf-delta .arr{color:var(--ink-4)}
+
+/* новостная колонка (sticky) */
+.bf-news{position:sticky;top:76px;background:var(--surface);border:1px solid var(--hair);
+  border-radius:var(--r-lg);box-shadow:var(--shadow-1);overflow:hidden}
+.bf-news-h{padding:13px 16px 11px;border-bottom:1px solid var(--hair);display:flex;align-items:baseline;gap:8px}
+.bf-news-cov{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink-4)}
+.bf-news-g{padding:9px 16px 3px;font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4)}
+.bf-news-it{display:block;padding:9px 16px 10px;border-top:1px solid var(--hair);text-decoration:none;color:inherit;
+  transition:background .12s;position:relative}
+.bf-news-it:hover{background:var(--paper-2)}
+.bf-news-it::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px;background:transparent}
+.bf-news-it[data-sev=red]::before{background:var(--neg)}
+.bf-news-it[data-sev=amber]::before{background:var(--warn)}
+.bf-news-it[data-sev=green]::before{background:var(--pos)}
+.bf-news-t{font-size:12.5px;font-weight:500;line-height:1.4}
+.bf-news-s{font-size:11.5px;line-height:1.5;color:var(--ink-2);margin-top:3px}
+.bf-news-m{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink-4);margin-top:5px;display:flex;gap:8px;align-items:center}
+.bf-news-empty{padding:22px 16px;font-size:12.5px;color:var(--ink-3)}
+
+/* сводка жалоб (markdown из reviews_brief) */
+.bf-brief{font-size:13px;line-height:1.6;color:var(--ink)}
+.bf-brief ul{margin:0;padding-left:2px;list-style:none}
+.bf-brief li{margin:0 0 9px;padding-left:16px;position:relative}
+.bf-brief li::before{content:"";position:absolute;left:2px;top:7px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.bf-brief p{margin:0 0 8px}
+.bf-stale{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--warn)}
+
+/* подвал доверия */
+.bf-trust{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-family:'JetBrains Mono',monospace;
+  font-size:10.5px;color:var(--ink-4);padding:14px 4px 0;border-top:1px solid var(--hair)}
+.bf-trust a{color:var(--ink-3);text-decoration:none}
+.bf-trust a:hover{color:var(--ink);text-decoration:underline}
+
+@media(max-width:1100px){
+  .bf-core{grid-template-columns:1fr}
+  .bf-news{position:static}
+  .bf-pulse{grid-template-columns:repeat(3,1fr)}
+  .bf-pulse>a{border-top:1px solid var(--hair)}
+  .bf-pulse>a:nth-child(-n+3){border-top:none}
+  .bf-pulse>a:nth-child(3n+1){border-left:none}
+}
+@media(max-width:720px){
+  .bf-cards{grid-template-columns:1fr}
+  .bf-pulse{grid-template-columns:1fr 1fr}
+  .bf-pulse>a{border-top:1px solid var(--hair)}
+  .bf-pulse>a:nth-child(-n+2){border-top:none}
+  .bf-pulse>a:nth-child(odd){border-left:none}
+}
+@media(prefers-reduced-motion:reduce){
+  .bf-card{animation:none}
+  .bf-live .dot{animation:none}
+}
 </style>
 </head>
 <body>
