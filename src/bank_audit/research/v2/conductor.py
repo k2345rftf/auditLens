@@ -396,6 +396,71 @@ def fan_out_researcher(plan: ResearchPlan) -> ResearchPlan:
     return plan
 
 
+# ── banki.ru product-каталог как детерминированный источник тарифов ──────────
+# Стабильный URL /products/{path}/{slug}/ отдаёт тарифы ЧИСТЫМ HTML по HTTP (без
+# браузера/капчи, ~1с). Без этого агент по «{банк} ипотека» находит через поиск
+# только сайт банка (sberbank.ru — SPA за F5-антиботом), тарифы не читаются, и в
+# отчёте по главному банку пусто. Подсовываем URL researcher-агенту явно.
+_BANKI_SLUG_OVERRIDE = {           # наш slug → banki.ru slug (где отличается)
+    "tinkoff": "tbank", "tbank": "tbank", "rosselkhozbank": "rshb",
+}
+
+
+def _banki_category_paths(text: str) -> list[str]:
+    """Категории banki.ru-каталога, упомянутые в тексте задания (мультивыбор —
+    отчёт может охватывать несколько продуктов). 404 по URL обрабатывается мягко."""
+    t = (text or "").lower()
+    out: list[str] = []
+    if any(k in t for k in ("ипотек", "ipotek", "hypothec", "жилищн")):
+        out.append("hypothec")
+    if "автокредит" in t or ("auto" in t and "кредит" in t) or "автокред" in t:
+        out.append("autocredits")
+    if ("кредитн" in t and "карт" in t) or "creditcard" in t or "кредитк" in t:
+        out.append("creditcards")
+    if ("дебетов" in t and "карт" in t) or "debitcard" in t or "дебетовк" in t:
+        out.append("debitcards")
+    if any(k in t for k in ("вклад", "депозит", "deposit", "накопит", "сбереж")):
+        out.append("deposits")
+    # потребкредит: «кредит» есть, но НЕ только как «кредитная карта»/«автокредит»
+    if any(k in t for k in ("потреб", "кредит наличн", "заём", "заем", "ссуд",
+                            "рассрочк")) or ("кредит" in t
+                                             and "кредитн карт" not in t
+                                             and "кредитк" not in t
+                                             and t.replace("автокредит", "").find("кредит") >= 0):
+        out.append("credits")
+    return list(dict.fromkeys(out))[:3]   # дедуп, максимум 3 категории
+
+
+def attach_banki_sources(plan: ResearchPlan) -> ResearchPlan:
+    """Детерминированно даёт researcher-миссиям приоритетный источник тарифов —
+    banki.ru/products/{cat}/{bank}/. Тюнится V2_BANKI_PRODUCT_HINT (1=вкл, 0=выкл)."""
+    if os.getenv("V2_BANKI_PRODUCT_HINT", "1") == "0":
+        return plan
+    hay = (f"{plan.product} {plan.intent_summary} "
+           + " ".join(m.goal for m in plan.missions if m.agent_id == "researcher"))
+    cats = _banki_category_paths(hay)
+    if not cats:
+        return plan
+    for m in plan.missions:
+        if m.agent_id != "researcher":
+            continue
+        subs = [s for s in (m.subjects or []) if s]
+        urls: list[str] = []
+        for s in subs[:6]:
+            bslug = _BANKI_SLUG_OVERRIDE.get(s, s)
+            label = plan.subject_labels.get(s, s)
+            for cat in cats:
+                urls.append(f"{label}: https://www.banki.ru/products/{cat}/{bslug}/")
+        if not urls:
+            continue
+        m.goal = (m.goal or "") + (
+            "\n\nПРИОРИТЕТНЫЙ ИСТОЧНИК ТАРИФОВ (banki.ru — чистый HTML по HTTP, без "
+            "капчи, актуальные ставки/ПСК/условия/требования). ОБЯЗАТЕЛЬНО прочитай "
+            "эти URL через read_url ПЕРВЫМ, ДО сайта банка (сайты банков — SPA за "
+            "антиботом, часто не отдают тарифы):\n" + "\n".join(urls[:8]))
+    return plan
+
+
 def _fallback_plan(question: str, hinted_banks: list[str]) -> ResearchPlan:
     """Минимальный план если Кондуктор упал. Всегда researcher + reviews."""
     subjects = hinted_banks or ["sberbank", "tinkoff", "alfabank", "vtb"]

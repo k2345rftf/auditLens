@@ -25,7 +25,8 @@ from openai import AsyncOpenAI
 from ...ai.analyst import LLM_BASE_URL, LLM_API_KEY
 from ...ai.llm_utils import (_patch_client_reasoning_effort, _format_llm_error,
                               normalize_question, deep_reasoning_extra)
-from .conductor import plan_research, ResearchPlan, fan_out_researcher
+from .conductor import (plan_research, ResearchPlan, fan_out_researcher,
+                        attach_banki_sources)
 from ._streaming import stream_reasoning_enabled
 from .knowledge_bundle import KnowledgeBundle
 from .base_agent import AgentMission
@@ -140,6 +141,10 @@ async def stream_deep_research_v2(question: str,
         # Раскладываем единого researcher'а на по-банковые миссии (глубина: каждый
         # банк получает отдельного агента с полным бюджетом чтений, а не ~1 стр/банк).
         plan = fan_out_researcher(plan)
+        # Подсовываем banki.ru product-страницы как приоритетный источник тарифов
+        # (иначе поиск по «{банк} ипотека» даёт только SPA-сайт банка → тарифы не
+        # находятся, отчёт по главному банку пустой).
+        plan = attach_banki_sources(plan)
     except Exception as e:
         log.exception("[v2] conductor failed: %s", e)
         yield _evt({"type": "text", "chunk": _format_llm_error(e, "планирование")})
