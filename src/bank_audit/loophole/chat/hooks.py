@@ -11,16 +11,29 @@ from __future__ import annotations
 
 from typing import Any
 
-from nanobot.agent.hook import AgentHook
-
 from ..pii_mask import mask as pii_mask
 
 
-class AuditHook(AgentHook):
+def _audit_hook_base() -> type:
+    """Возвращает AgentHook из nanobot, если доступен, иначе object-заглушку."""
+    try:
+        from nanobot.agent.hook import AgentHook  # type: ignore[import-not-found]
+
+        return AgentHook
+    except ImportError:  # pragma: no cover - nanobot optional
+        return object
+
+
+class AuditHook(_audit_hook_base()):
     """Hook для nanobot-запуска: собирает tools, records, финальный ответ."""
 
     def __init__(self, *, session: Any = None) -> None:
-        super().__init__()
+        base = _audit_hook_base()
+        if base is object:
+            raise RuntimeError(
+                "nanobot-ai не установлен. Установите: pip install -e '.[loophole-nanobot]'"
+            )
+        super(base, self).__init__()
         self.session = session
         self.tools_used: list[str] = []
         self.records: list[dict] = []
