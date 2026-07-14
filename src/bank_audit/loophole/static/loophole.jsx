@@ -212,7 +212,8 @@ function LoopholeApp() {
   };
 
   // ── Чат: отправка + полный SSE-парсер ──────────────────────────────────────
-  const sendChat = useCallback(async (overrideMessage) => {
+  const sendChat = useCallback(async (overrideMessage, opts) => {
+    const skipClarify = !!(opts && opts.skipClarify);
     const userMsg = overrideMessage != null ? overrideMessage : chatInput;
     if (!userMsg || !userMsg.trim() || !workspaceId) return;
     setChat(prev => [...prev, {role: "user", content: userMsg}]);
@@ -224,7 +225,7 @@ function LoopholeApp() {
     try {
       const resp = await fetch(`${API}/chat`, {
         method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({workspace_id: workspaceId, message: userMsg, history: chat}),
+        body: JSON.stringify({workspace_id: workspaceId, message: userMsg, history: chat, skip_clarify: skipClarify}),
       });
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -403,8 +404,9 @@ function LoopholeApp() {
       setPendingQuestions(null);
       setAnswersByQ({});
       if (enriched) {
+        // clarify уже пройден → просим бэкенд пропустить гейт (не зацикливаться)
         // отправляем обогащённый вопрос как новое сообщение в чат
-        await sendChat(enriched);
+        await sendChat(enriched, {skipClarify: true});
       }
     } catch (e) {
       setChat(prev => [...prev, {role: "assistant", content: "Ошибка отправки ответа: " + String(e)}]);

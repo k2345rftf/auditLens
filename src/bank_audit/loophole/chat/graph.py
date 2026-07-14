@@ -125,20 +125,25 @@ async def stream_chat(
     workspace_id = state.get("workspace_id")
     query = state.get("query", "")
 
-    # Clarify.
-    yield {"event": "phase", "data": {"phase": "clarify"}}
-    clarification = await clarify_mod.generate_clarifications(
-        query, history=state.get("messages")
-    )
-    if not clarification.get("complete"):
-        yield {"event": "phase", "data": {"phase": "await_clarify"}}
-        for q in clarification.get("questions", []):
-            yield {"event": "question", "data": q}
-        return
-
-    enriched = await clarify_mod.build_enriched_question(
-        query, state.get("clarify_answers", [])
-    )
+    # Clarify — ТОЛЬКО на первом ходе. skip_clarify=True приходит с /chat после
+    # /clarify/answer (сообщение уже обогащено ответами) → пропускаем гейт и идём
+    # выполнять. Иначе generate_clarifications перезапускался бы на КАЖДЫЙ /chat,
+    # и агент зацикливался на уточнениях.
+    if state.get("skip_clarify"):
+        enriched = query
+    else:
+        yield {"event": "phase", "data": {"phase": "clarify"}}
+        clarification = await clarify_mod.generate_clarifications(
+            query, history=state.get("messages")
+        )
+        if not clarification.get("complete"):
+            yield {"event": "phase", "data": {"phase": "await_clarify"}}
+            for q in clarification.get("questions", []):
+                yield {"event": "question", "data": q}
+            return
+        enriched = await clarify_mod.build_enriched_question(
+            query, state.get("clarify_answers", [])
+        )
     state = {**state, "query": enriched}
 
     yield {"event": "phase", "data": {"phase": "execute"}}
