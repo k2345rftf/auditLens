@@ -4,3 +4,4 @@
 пользовательский workspace, чат-выгрузка с доработкой (/web_fetch, /web_search),
 логирование действий. AI — langchain/langgraph.
 """
+from __future__ import annotations

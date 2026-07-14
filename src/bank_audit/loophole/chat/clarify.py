@@ -48,6 +48,9 @@ def _clarify_model() -> str:
 def _client() -> AsyncOpenAI:
     base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     api_key = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    # .env может содержать inline-комментарий на русском; httpx падает с
+    # UnicodeEncodeError, если api_key содержит не-ascii символы.
+    api_key = (api_key.split("#", 1)[0]).strip()
     c = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=70, max_retries=2)
     return _patch_client_reasoning_effort(c)
 

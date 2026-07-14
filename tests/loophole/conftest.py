@@ -25,6 +25,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("LLM_API_KEY", "test-key")
 os.environ.setdefault("LLM_BASE_URL", "http://localhost:9999/v1")
 os.environ.setdefault("LLM_MODEL_NAME", "test-model")
+os.environ.setdefault("GEMINI_API_KEY", "test-gemini-key")
+os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
 
 
 SCHEMA_SQL = """

@@ -141,6 +141,9 @@ class ChatRequest(BaseModel):
     workspace_id: int
     message: str
     history: list[dict] = []
+    # Ответы на clarify-воронку. Если не пробросить — stream_chat снова
+    # сгенерирует вопросы и UI зациклится (chat → clarify/answer → chat → …).
+    clarify_answers: list[dict] = Field(default_factory=list)
 
 
 @router.post("/chat")
@@ -157,6 +160,7 @@ async def chat(
         "workspace_id": body.workspace_id,
         "user_id": user_id,
         "session": session,
+        "clarify_answers": body.clarify_answers,
     }
     # Сохраняем сообщение пользователя.
     repo.add_chat_message(body.workspace_id, "user", body.message, session=session)

@@ -33,6 +33,8 @@ def _default_llm():
     from langchain_openai import ChatOpenAI
     base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     api_key = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    # httpx падает с UnicodeEncodeError, если api_key содержит не-ascii.
+    api_key = (api_key.split("#", 1)[0]).strip()
     model = LoopholeSettings.load().effective_classify_model()
     return ChatOpenAI(model=model, base_url=base_url, api_key=api_key, temperature=0.3)
 

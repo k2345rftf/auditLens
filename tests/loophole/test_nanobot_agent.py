@@ -19,6 +19,24 @@ def test_build_nanobot_config_uses_env():
     assert cfg["tools"]["web"]["enable"] is False
 
 
+def test_build_nanobot_config_selects_qwen_provider(monkeypatch):
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "ds-test-key")
+    cfg = build_nanobot_config(model="qwen3.6")
+    assert cfg["agents"]["defaults"]["provider"] == "dashscope"
+    assert cfg["agents"]["defaults"]["model"] == "qwen3.6"
+    assert cfg["providers"]["dashscope"]["apiBase"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert cfg["providers"]["dashscope"]["apiKey"] == "ds-test-key"
+
+
+def test_build_nanobot_config_selects_gemini_provider(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gm-test-key")
+    cfg = build_nanobot_config(model="gemini-1.5-pro")
+    assert cfg["agents"]["defaults"]["provider"] == "gemini"
+    assert cfg["agents"]["defaults"]["model"] == "gemini-1.5-pro"
+    assert cfg["providers"]["gemini"]["apiBase"] == "https://generativelanguage.googleapis.com/v1beta/openai/"
+    assert cfg["providers"]["gemini"]["apiKey"] == "gm-test-key"
+
+
 def test_build_prompt_includes_history():
     prompt = build_prompt("вопрос", [{"role": "user", "content": "привет"}])
     assert "привет" in prompt

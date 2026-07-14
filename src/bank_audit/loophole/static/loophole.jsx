@@ -212,19 +212,35 @@ function LoopholeApp() {
   };
 
   // ── Чат: отправка + полный SSE-парсер ──────────────────────────────────────
-  const sendChat = useCallback(async (overrideMessage) => {
-    const userMsg = overrideMessage != null ? overrideMessage : chatInput;
+  const sendChat = useCallback(async (overridePayload) => {
+    let userMsg, extraAnswers;
+    if (overridePayload != null && typeof overridePayload === "object" && overridePayload.message != null) {
+      userMsg = overridePayload.message;
+      extraAnswers = overridePayload.clarify_answers;
+    } else {
+      userMsg = overridePayload != null ? overridePayload : chatInput;
+    }
     if (!userMsg || !userMsg.trim() || !workspaceId) return;
-    setChat(prev => [...prev, {role: "user", content: userMsg}]);
-    if (overrideMessage == null) setChatInput("");
+    // После clarify шлём тот же исходный запрос + answers — не дублируем bubble.
+    const lastUser = [...chat].reverse().find(m => m.role === "user");
+    const skipUserBubble = Boolean(extraAnswers && extraAnswers.length
+      && lastUser && lastUser.content === userMsg);
+    if (!skipUserBubble) {
+      setChat(prev => [...prev, {role: "user", content: userMsg}]);
+    }
+    if (overridePayload == null || typeof overridePayload !== "object") setChatInput("");
     setChatLoading(true);
     setToolEvents([]);
     setPendingQuestions(null);
     let gotQuestions = false;
     try {
+      const payload = {workspace_id: workspaceId, message: userMsg, history: chat};
+      if (extraAnswers && extraAnswers.length) {
+        payload.clarify_answers = extraAnswers;
+      }
       const resp = await fetch(`${API}/chat`, {
         method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({workspace_id: workspaceId, message: userMsg, history: chat}),
+        body: JSON.stringify(payload),
       });
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -383,8 +399,9 @@ function LoopholeApp() {
 
   const submitAnswers = async () => {
     if (!pendingQuestions || !pendingQuestions.length) return;
-    const q = pendingQuestions[0];
-    const ans = answersByQ[q.id] || {selected: [], other: ""};
+    // Исходный запрос пользователя (не текст clarify-вопроса).
+    const originalQuestion = [...chat].reverse().find(m => m.role === "user")?.content || "";
+    if (!originalQuestion.trim()) return;
     const answersPayload = pendingQuestions.map(pq => {
       const a = answersByQ[pq.id] || {selected: [], other: ""};
       return {
@@ -393,19 +410,16 @@ function LoopholeApp() {
         other: a.other,
       };
     });
+    setPendingQuestions(null);
+    setAnswersByQ({});
+    // clarify_answers обязательны: иначе бэкенд снова запустит generate_clarifications
+    // (ранее ChatRequest их отбрасывал → цикл chat → await_clarify → chat).
+    // Enrich делает stream_chat на бэкенде — повторный /clarify/answer не нужен.
     try {
-      const r = await fetch(`${API}/clarify/answer`, {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({question: q.question, answers: answersPayload}),
+      await sendChat({
+        message: originalQuestion,
+        clarify_answers: answersPayload,
       });
-      const d = await r.json();
-      const enriched = (d && d.enriched_question) || (typeof d === "string" ? d : "");
-      setPendingQuestions(null);
-      setAnswersByQ({});
-      if (enriched) {
-        // отправляем обогащённый вопрос как новое сообщение в чат
-        await sendChat(enriched);
-      }
     } catch (e) {
       setChat(prev => [...prev, {role: "assistant", content: "Ошибка отправки ответа: " + String(e)}]);
     }

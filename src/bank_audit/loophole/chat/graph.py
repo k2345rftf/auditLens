@@ -72,11 +72,14 @@ async def run_chat(
     state = {**state, "session": session if session is not None else state.get("session")}
     workspace_id = state.get("workspace_id")
 
-    # Clarify-воронка.
-    clarification = await clarify_mod.generate_clarifications(
-        state.get("query", ""),
-        history=state.get("messages"),
-    )
+    # Clarify-воронка. Если пользователь уже отвечал на уточнения — не запускаем
+    # воронку повторно, чтобы избежать зацикливания.
+    clarification = {"complete": True, "questions": [], "reason": "already_answered"}
+    if not state.get("clarify_answers"):
+        clarification = await clarify_mod.generate_clarifications(
+            state.get("query", ""),
+            history=state.get("messages"),
+        )
     if not clarification.get("complete"):
         return {
             **state,
@@ -127,9 +130,11 @@ async def stream_chat(
 
     # Clarify.
     yield {"event": "phase", "data": {"phase": "clarify"}}
-    clarification = await clarify_mod.generate_clarifications(
-        query, history=state.get("messages")
-    )
+    clarification = {"complete": True, "questions": [], "reason": "already_answered"}
+    if not state.get("clarify_answers"):
+        clarification = await clarify_mod.generate_clarifications(
+            query, history=state.get("messages")
+        )
     if not clarification.get("complete"):
         yield {"event": "phase", "data": {"phase": "await_clarify"}}
         for q in clarification.get("questions", []):
@@ -160,8 +165,8 @@ async def stream_chat(
         if records:
             yield {"event": "records", "data": records}
         yield {"event": "phase", "data": {"phase": "answer"}}
-        if answer:
-            yield {"event": "token", "data": answer}
+        # Финальный ответ уже был отправлен событием run.completed/text.completed;
+        # здесь только сохраняем его в БД.
 
         # Сохраняем ответ.
         if workspace_id and answer:
@@ -179,16 +184,34 @@ async def stream_chat(
 def _map_event(event: Any, hook: AuditHook) -> dict | None:
     """Маппит nanobot StreamEvent на SSE-события loophole."""
     from nanobot.sdk.types import (
+        STREAM_EVENT_RUN_COMPLETED,
+        STREAM_EVENT_RUN_FAILED,
+        STREAM_EVENT_TEXT_COMPLETED,
         STREAM_EVENT_TEXT_DELTA,
-        STREAM_EVENT_TOOL_STARTED,
         STREAM_EVENT_TOOL_COMPLETED,
         STREAM_EVENT_TOOL_FAILED,
-        STREAM_EVENT_RUN_FAILED,
+        STREAM_EVENT_TOOL_STARTED,
     )
 
     ev_type = getattr(event, "type", None)
     if ev_type == STREAM_EVENT_TEXT_DELTA:
-        return {"event": "token", "data": getattr(event, "content", "")}
+        delta = getattr(event, "content", "") or getattr(event, "delta", "")
+        if delta:
+            hook.final_answer += delta
+            return {"event": "token", "data": delta}
+        return None
+    if ev_type == STREAM_EVENT_TEXT_COMPLETED:
+        content = getattr(event, "content", "") or ""
+        if content:
+            hook.final_answer = content
+            return {"event": "token", "data": content}
+        return None
+    if ev_type == STREAM_EVENT_RUN_COMPLETED:
+        content = getattr(event, "content", "") or ""
+        if content:
+            hook.final_answer = content
+            return {"event": "token", "data": content}
+        return None
     if ev_type == STREAM_EVENT_TOOL_STARTED:
         return {
             "event": "tool_call",

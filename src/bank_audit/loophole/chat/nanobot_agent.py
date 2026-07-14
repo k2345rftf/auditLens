@@ -15,6 +15,7 @@ from typing import Any
 
 from ...config import ROOT
 from ..config import LoopholeSettings
+from .llm_adapters import create_adapter
 from .tools_nanobot import NANOBOT_TOOLS
 
 log = logging.getLogger(__name__)
@@ -27,17 +28,10 @@ def load_system_prompt() -> str:
     return _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def _default_provider_config() -> dict:
-    """Конфигурация провайдера по переменным окружения проекта."""
-    base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    api_key = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-    return {"apiBase": base_url, "apiKey": api_key}
-
-
 def build_nanobot_config(
     *,
     model: str | None = None,
-    provider: str = "openai",
+    provider: str | None = None,
     temperature: float = 0.3,
     max_iterations: int | None = None,
 ) -> dict:
@@ -46,12 +40,24 @@ def build_nanobot_config(
     effective_model = model or settings.effective_nanobot_model()
     max_iter = max_iterations or settings.nanobot_max_iterations
 
+    adapter = create_adapter(effective_model)
+    provider_name = provider or adapter.provider_name
+    wire_model = adapter.wire_model_name(effective_model)
+    provider_cfg = adapter.prepare_request(model=wire_model, temperature=temperature)
+
+    if not provider_cfg.get("apiKey"):
+        raise ValueError(
+            f"Не задан API-ключ для провайдера '{provider_name}'. "
+            f"Установите переменную окружения {adapter.provider_name.upper()}_API_KEY "
+            f"или LLM_API_KEY (fallback)."
+        )
+
     return {
-        "providers": {provider: _default_provider_config()},
+        "providers": {provider_name: provider_cfg},
         "agents": {
             "defaults": {
-                "provider": provider,
-                "model": effective_model,
+                "provider": provider_name,
+                "model": wire_model,
                 "temperature": temperature,
                 "maxToolIterations": max_iter,
             }
@@ -70,7 +76,7 @@ def build_nanobot_config(
 def create_nanobot(
     *,
     model: str | None = None,
-    provider: str = "openai",
+    provider: str | None = None,
     temperature: float = 0.3,
     max_iterations: int | None = None,
     workspace: str | Path | None = None,

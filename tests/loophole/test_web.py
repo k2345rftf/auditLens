@@ -22,10 +22,7 @@ from bank_audit.hashing import sha256_text
 
 from fastapi import FastAPI
 
-
-SCHEMA_SQL = open(
-    __import__("pathlib").Path(__file__).parent / "test_repository.py"
-).read().split('SCHEMA_SQL = """')[1].split('"""')[0]
+from tests.loophole.conftest import SCHEMA_SQL
 
 
 @pytest.fixture
@@ -135,6 +132,32 @@ def test_chat_sse(client):
     assert r.status_code == 200
     # EventSourceResponse отдаёт text/event-stream.
     assert "event-stream" in r.headers.get("content-type", "")
+
+
+def test_chat_passes_clarify_answers_to_stream(client, monkeypatch):
+    """После ответа на clarify фронт шлёт clarify_answers в /chat.
+    Если API их отбрасывает, stream_chat снова зовёт воронку — зацикливание."""
+    from bank_audit.loophole.chat import graph as chat_graph
+
+    captured: dict = {}
+
+    async def fake_stream(state, *, llm=None, session=None):
+        captured["clarify_answers"] = state.get("clarify_answers")
+        yield {"event": "phase", "data": {"phase": "done"}}
+
+    monkeypatch.setattr(chat_graph, "stream_chat", fake_stream)
+
+    answers = [{"question": "Какой банк?", "selected": ["Сбербанк"], "other": ""}]
+    r = client.post("/api/loophole/chat", json={
+        "workspace_id": 1,
+        "message": "найди лазейки в Сбербанке",
+        "history": [],
+        "clarify_answers": answers,
+    })
+    assert r.status_code == 200
+    assert "event-stream" in r.headers.get("content-type", "")
+    _ = r.text  # читаем SSE, чтобы event_generator отработал
+    assert captured.get("clarify_answers") == answers
 
 
 # ── Тесты новых эндпоинтов: clarify / parsers / table/load ─────────────────
