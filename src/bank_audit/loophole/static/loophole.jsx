@@ -379,8 +379,11 @@ function LoopholeApp() {
       setChat(prev => [...prev, {role: "assistant", content: "Ошибка: " + String(e)}]);
     } finally {
       setChatLoading(false);
+      // Подтягиваем в таблицу лазейки, которые агент сохранил за этот ход
+      // (audit_save_loophole пишет в loophole_record во время стрима).
+      loadRecords();
     }
-  }, [chatInput, workspaceId, chat]);
+  }, [chatInput, workspaceId, chat, loadRecords]);
 
   // ── Уточняющие вопросы: helpers ──────────────────────────────────────────
   const toggleAnswer = (qid, value, multi) => {
