@@ -19,7 +19,7 @@ SSL-сертификат и настройку доступа (Authentik / OIDC)
    Реверс-прокси ОАИТ  ──  SSL-терминация + Authentik (OIDC, доступ)
         │  http (внутри контура)
         ▼
-   [ app ]  uvicorn 0.0.0.0:8000   ←─ docker-compose.prod.yml на VM вертикали
+   [ app ]  uvicorn 0.0.0.0:8001   ←─ docker-compose.prod.yml на VM вертикали
         ├── managed PostgreSQL + pgvector   (10.0.3.43:5432, схема auditlens)
         ├── Foundation Models                (https://foundation-models.api.cloud.ru/v1/)
         ├── [ searxng ] sidecar              (внутренняя сеть compose, bing+dogpile)
@@ -33,9 +33,10 @@ managed-БД (`oarb_auditlens`, её уже создал ты, pgvector вклю
 миграции, `.env` и ключ API — это одноразовая настройка деплоя (делаешь ты/ОАИТ),
 а не действие каждого пользователя.
 
-**Что приложение делает само:** слушает `0.0.0.0:8000`, работает на корне
-поддомена, отдаёт SPA + API + SSE, читает/пишет managed-PG, ходит в Foundation
-Models и SearXNG.
+**Что приложение делает само:** слушает порт, заданный переменной `APP_PORT`
+в `.env` (`.env.example` устанавливает `8001`; если `APP_PORT` не задан — `8000`),
+работает на корне поддомена, отдаёт SPA + API + SSE, читает/пишет managed-PG,
+ходит в Foundation Models и SearXNG.
 
 **Что приложение НЕ делает (берёт на себя платформа ОАИТ):**
 - ❌ собственную авторизацию/логин — доступ режет **Authentik** на прокси;
@@ -88,8 +89,8 @@ docker compose -f docker-compose.prod.yml up -d
 
 # 4. Проверка
 docker compose -f docker-compose.prod.yml ps
-curl -fsS http://127.0.0.1:8000/healthz   # {"status":"ok"}
-curl -fsS http://127.0.0.1:8000/readyz    # {"status":"ready"} (если PG доступна)
+curl -fsS http://127.0.0.1:8001/healthz   # {"status":"ok"}
+curl -fsS http://127.0.0.1:8001/readyz    # {"status":"ready"} (если PG доступна)
 ```
 
 После этого сообщить ОАИТ имя сервиса/порт — они навесят поддомен, SSL и Authentik.
@@ -170,8 +171,8 @@ docker run --rm --network host \
 docker run --rm --network host \
   -e DATABASE_URL='postgresql+psycopg://audit:audit@127.0.0.1:5432/bank_audit' \
   -e LLM_API_KEY=test -e EMBEDDING_MODE=api \
-  -p 8000:8000 auditlens:test
-# затем: curl localhost:8000/healthz  и  localhost:8000/readyz
+  -p 8001:8001 auditlens:test
+# затем: curl localhost:8001/healthz  и  localhost:8001/readyz
 ```
 
 ---

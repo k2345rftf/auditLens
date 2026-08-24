@@ -3,10 +3,15 @@
 """
 from __future__ import annotations
 import asyncio
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 OUT = Path(__file__).resolve().parent.parent / "docs" / "img"
-URL = "http://127.0.0.1:8000"
+URL = f"http://127.0.0.1:{os.getenv('APP_PORT', '8000')}"
 Q = "Сравни условия оформления и тарифы по нотариальным доверенностям для распоряжения банковским счётом в Сбербанке, ВТБ, Альфа-банке и Тинькофф"
 
 

@@ -4,7 +4,7 @@
     cd <repo> && .venv/bin/python scripts/_make_screenshots.py
 
 Требует:
-    - запущенный сервер на http://127.0.0.1:8000
+    - запущенный сервер на http://127.0.0.1:<APP_PORT> (по умолчанию 8000)
     - playwright + chromium (уже в .venv)
 
 Сохраняет в docs/img/01_main_ui.png, 02_deep_research_in_progress.png и т.д.
@@ -14,10 +14,14 @@ from __future__ import annotations
 import asyncio, os, sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 OUT = Path(__file__).resolve().parent.parent / "docs" / "img"
 OUT.mkdir(parents=True, exist_ok=True)
 
-URL = "http://127.0.0.1:8000"
+URL = f"http://127.0.0.1:{os.getenv('APP_PORT', '8000')}"
 SAMPLE_Q = ("Сравни условия премиальных дебетовых карт Сбер Прайм, "
             "Тинькофф Premium, Альфа Wealth по комиссиям, кешбэку, привилегиям")
 

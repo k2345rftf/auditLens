@@ -274,10 +274,12 @@ playwright install-deps chromium   # только Linux
 
 ### Сервер не запускается: `Address already in use`
 
+Порт задаётся переменной `APP_PORT` в `.env` (по умолчанию `8000`).
+
 **Решение:**
 ```bash
-lsof -ti :8000 | xargs kill -9
-uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000
+lsof -ti :${APP_PORT:-8000} | xargs kill -9
+uvicorn bank_audit.web.app:app --host 127.0.0.1 --port ${APP_PORT:-8000}
 ```
 
 Или используй другой порт:

@@ -35,7 +35,7 @@ def list_sources():
 
 @cli.command()
 @click.option("--host", default="127.0.0.1", show_default=True)
-@click.option("--port", default=8000, show_default=True)
+@click.option("--port", default=8000, envvar="APP_PORT", show_default=True)
 @click.option("--reload", is_flag=True, default=False)
 def serve(host: str, port: int, reload: bool):
     """Запустить веб-интерфейс."""

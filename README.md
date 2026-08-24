@@ -133,10 +133,13 @@ open -e .env       # mac (откроет TextEdit)
 
 # 4. Запусти сервер
 source .venv/bin/activate
-uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000
+uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8001
 ```
 
-Открой [http://127.0.0.1:8000](http://127.0.0.1:8000) → введи вопрос → готово.
+> Порт задаётся переменной `APP_PORT` в `.env` (`.env.example` устанавливает `8001`).
+> Если `APP_PORT` не задан — используется `8000`.
+
+Открой [http://127.0.0.1:8001](http://127.0.0.1:8001) → введи вопрос → готово.
 
 > 📖 **Не уверен в командах?** → [docs/SETUP.md](docs/SETUP.md) — пошаговый гайд с разделением по mac/Windows/Linux
 > 🔑 **Где взять API-ключ?** → [docs/API_KEYS.md](docs/API_KEYS.md)

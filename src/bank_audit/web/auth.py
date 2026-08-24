@@ -13,7 +13,7 @@ Nginx перед приложением делает `auth_request` к Authentik
 получить, ОАИТ должен добавить соответствующие `auth_request_set` +
 `proxy_set_header` (Authentik-аутпост их отдаёт, nginx просто не форвардит).
 
-⚠️ Приложение слушает 0.0.0.0:8000 напрямую — запрос в обход nginx может
+⚠️ Приложение слушает 0.0.0.0:8001 напрямую — запрос в обход nginx может
 прислать фейковый X-Authentik-Username. Снаружи порт закрыт security-группой;
 доверять заголовку можно только на пути через nginx.
 
@@ -71,5 +71,5 @@ def get_current_user(
     if username:
         name = _fix_header_encoding((x_authentik_name or "").strip()) or username
         return CurrentUser(username=username, name=name, authenticated=True)
-    # Заголовка нет → локалка или прямой доступ к :8000 в обход nginx.
+    # Заголовка нет → локалка или прямой доступ к :8001 в обход nginx.
     return CurrentUser(username=_DEV_USER, name=_DEV_USER, authenticated=False)

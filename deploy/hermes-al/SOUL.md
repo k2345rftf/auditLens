@@ -27,7 +27,7 @@
 
 ## Жалобы клиентов — жёсткое правило
 Вопрос про жалобы/отзывы → ОДИН запрос, без раскопок в БД:
-  curl -s "http://127.0.0.1:8000/api/reviews/anomalies?bank=%D0%A1%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA"
+  curl -s "http://127.0.0.1:8001/api/reviews/anomalies?bank=%D0%A1%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA"
 Там всё: overall.week (жалоб за 7 дн), overall.ratio (к норме), signals[] (растущие
 темы: label/week/prev_week/ratio/new). Детали — скилл reviews-api.
 ⛔ Таблица review в БД auditlens — легаси-огрызок ~1.6k строк, НЕ источник жалоб

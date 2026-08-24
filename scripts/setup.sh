@@ -187,11 +187,12 @@ case "${1:-all}" in
         ok "Установка завершена!"
         echo "═══════════════════════════════════════════════════════════"
         echo
+        APP_PORT="${APP_PORT:-8000}"
         echo "Запусти приложение:"
         echo "    source .venv/bin/activate"
-        echo "    uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000"
+        echo "    uvicorn bank_audit.web.app:app --host 127.0.0.1 --port $APP_PORT"
         echo
-        echo "Открой в браузере: http://127.0.0.1:8000"
+        echo "Открой в браузере: http://127.0.0.1:$APP_PORT"
         ;;
     *)
         error "Неизвестная команда: $1"

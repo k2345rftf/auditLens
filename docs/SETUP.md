@@ -265,9 +265,11 @@ LLM_API_KEY=fw_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890
 
 ## Шаг 8 — Запусти AuditLens
 
+Порт сервера задаётся переменной `APP_PORT` в `.env` (`.env.example` устанавливает `8001`); если переменная не задана — используется `8000`.
+
 ```bash
 source .venv/bin/activate
-uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000
+uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8001
 ```
 
 Первая команда «активирует» виртуальное окружение (увидишь `(.venv)` в начале строки терминала — это значит активно).
@@ -277,7 +279,7 @@ uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000
 INFO:     Started server process [12345]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Uvicorn running on http://127.0.0.1:8001
 ```
 
 **Не закрывай это окно** — пока оно открыто, сервер работает.
@@ -286,7 +288,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8000
 
 ## Шаг 9 — Открой AuditLens в браузере
 
-В браузере перейди на: **[http://127.0.0.1:8000](http://127.0.0.1:8000)**
+В браузере перейди на: **[http://127.0.0.1:8001](http://127.0.0.1:8001)**
 
 Увидишь главный экран:
 
@@ -427,7 +429,7 @@ psql "$DSN" -f src/bank_audit/analytics/views.sql
 
 ### Запустить сервер
 ```bash
-uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000
+uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8001
 ```
 
 ### Опционально: SearXNG
@@ -456,7 +458,7 @@ SearXNG лучше всё-таки через Docker (его очень тяже
 - [ ] Файл `.env` создан и в нём прописан **твой реальный** `LLM_API_KEY` (не `fw_REPLACE_WITH_YOUR_KEY`)
 - [ ] `docker compose ps` показывает `auditlens-postgres` и `auditlens-searxng` в статусе UP
 - [ ] Сервер запущен (`uvicorn ...` в одном окне терминала)
-- [ ] [http://127.0.0.1:8000](http://127.0.0.1:8000) открывается в браузере
+- [ ] [http://127.0.0.1:8001](http://127.0.0.1:8001) открывается в браузере
 - [ ] В разделе «ИИ-аналитик» можно ввести вопрос и получить ответ
 
 Если все пункты ✅ — поздравляю, AuditLens готов к работе!

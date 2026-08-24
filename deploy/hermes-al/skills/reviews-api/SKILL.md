@@ -9,7 +9,7 @@ read-only БД, доступ к ним — ТОЛЬКО через готовы�
 
 ## Готовые ответы одним запросом
 - Сколько жалоб за неделю + динамика + растущие темы (ЭТО ОТВЕТ НА ТИПОВОЙ ВОПРОС):
-  curl -s "http://127.0.0.1:8000/api/reviews/anomalies?bank=%D0%A1%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA"
+  curl -s "http://127.0.0.1:8001/api/reviews/anomalies?bank=%D0%A1%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA"
   → signals[]: label (тема), week (за 7 дн), prev_week, baseline_week (медиана прошлых
   6 недель), ratio (во сколько раз к норме), new/accel; overall: week/ratio по банку.
 - Объём/доля за период: /api/reviews/overview?bank=Сбербанк&days=90

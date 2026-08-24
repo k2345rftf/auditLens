@@ -21,7 +21,7 @@
 ```mermaid
 flowchart TB
     U[Аудитор] --> NG[внешний nginx + SSO OIDC]
-    NG --> APP[FastAPI + uvicorn<br/>Docker :8000<br/>ВМ в облаке]
+    NG --> APP[FastAPI + uvicorn<br/>Docker :8001<br/>ВМ в облаке]
 
     APP --> DR[Deep Research v2<br/>Conductor - агенты - Analyst - Critic]
     APP --> DG[Обзор<br/>ежедневный брифинг]
@@ -53,7 +53,7 @@ flowchart TB
 | Компонент | Как есть |
 |---|---|
 | ВМ | Ubuntu 24.04, 4vCPU/8GB, регион ru-moscow-1 (движок Huawei) |
-| Приложение | один контейнер `auditlens-app`, `--network host`, порт `:8000` |
+| Приложение | один контейнер `auditlens-app`, `--network host`, порт `:8001` |
 | Доступ | внешний nginx + **SSO (OIDC)**: TLS и аутентификация терминируются на прокси |
 | БД | **managed PostgreSQL 17.5** + pgvector, схема `auditlens` |
 | LLM + эмбеддинги | **Foundation Models cloud.ru**, `https://foundation-models.api.cloud.ru/v1/` (OpenAI-совместимый) |

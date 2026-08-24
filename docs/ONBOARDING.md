@@ -6,7 +6,7 @@
 > **TL;DR.** AuditLens — Deep-Research платформа для внутреннего аудита банковских
 > продуктов: FastAPI-бэкенд + RAG/LLM-агент + React-фронт (без сборки, Babel в браузере)
 > + PostgreSQL/pgvector. Локально: подними БД через `docker compose`, поставь пакет
-> `pip install -e .`, запусти `auditlens serve --reload`, открой `http://127.0.0.1:8000`.
+> `pip install -e .`, запусти `auditlens serve --reload`, открой `http://127.0.0.1:8001`.
 > Прод крутится в Docker-контейнере на VM `ecs-oarb` в Облаке УВА.
 
 ---
@@ -100,7 +100,7 @@ cp .env.example .env
 **4.4. Миграции и запуск**
 ```bash
 # применить миграции (см. docs/SETUP.md — там же сидинг демо-данных)
-auditlens serve --reload          # → http://127.0.0.1:8000  (хост/порт меняются флагами)
+auditlens serve --reload          # → http://127.0.0.1:8001  (порт берётся из APP_PORT в .env; по умолчанию 8000)
 ```
 Вкладка «ИИ-аналитик» — пятый пункт левого меню (`/#ai`).
 
@@ -143,7 +143,7 @@ auditlens serve --reload          # → http://127.0.0.1:8000  (хост/пор�
 
 **Координаты (текущий деплой владельца):**
 - Хост: `87.242.123.218`, пользователь `amzenkovskiy-2127124`, ключ `~/.ssh/id_ed25519_uva`.
-- Контейнер: `auditlens-app` (образ `auditlens:prod`), порт `8000`, `--network host`,
+- Контейнер: `auditlens-app` (образ `auditlens:prod`), порт `8001`, `--network host`,
   `--env-file ~/auditlens/.env`, `--restart unless-stopped`.
 - **Build-context на сервере:** `~/auditlens-container/` (там `Dockerfile` + копия `src/`).
 - **Секреты** в `~/auditlens/.env` (НЕ в образе, НЕ в git).
@@ -178,7 +178,7 @@ ssh -i ~/.ssh/id_ed25519_uva amzenkovskiy-2127124@87.242.123.218
   docker stop auditlens-app && docker rm auditlens-app
   docker run -d --name auditlens-app --init --network host \
     --env-file "$HOME/auditlens/.env" --restart unless-stopped auditlens:prod
-  curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/   # ждём 200
+  curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8001/   # ждём 200
 ```
 > ⚠️ Флаг `--init` ОБЯЗАТЕЛЕН: tini как PID 1 реапит зомби-процессы Chromium
 > (Playwright). Без него defunct-процессы копятся в process-table.
@@ -192,7 +192,7 @@ ssh -i ~/.ssh/id_ed25519_uva amzenkovskiy-2127124@87.242.123.218
 
 SSH-контур не выставляет порт наружу — пробрасываем туннель и открываем в браузере локально:
 ```bash
-ssh -f -N -L 18000:127.0.0.1:8000 -i ~/.ssh/id_ed25519_uva amzenkovskiy-2127124@87.242.123.218
+ssh -f -N -L 18000:127.0.0.1:8001 -i ~/.ssh/id_ed25519_uva amzenkovskiy-2127124@87.242.123.218
 # затем открыть http://127.0.0.1:18000   (вкладка ИИ-аналитик: /#ai)
 ```
 Логи/состояние контейнера:

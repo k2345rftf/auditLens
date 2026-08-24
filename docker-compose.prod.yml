@@ -28,7 +28,7 @@ services:
         required: false               # при Infisical-инжекте env прямо в окружение файла может не быть
     environment:
       APP_HOST: "0.0.0.0"
-      APP_PORT: "8000"
+      APP_PORT: "${APP_PORT:-8000}"
       EMBEDDING_MODE: "api"           # эмбеддинги через Foundation Models (без torch)
       SEARXNG_URL: "http://searxng:8080"
       # CORS_ALLOW_ORIGINS: "https://auditlens.uva-advanced.ru"  # сузить за прокси
@@ -40,7 +40,7 @@ services:
     ports:
       # Наружу торчит ТОЛЬКО реверс-прокси ОАИТ. Биндим на loopback хоста —
       # прокси ОАИТ проксирует сюда. (или подключите app в сеть прокси без ports.)
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:${APP_PORT:-8000}"
 
   searxng:
     image: searxng/searxng:2026.6.17-4dfdc822c   # запиннено (= latest на 2026-06-18, тот же digest)

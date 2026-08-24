@@ -371,11 +371,12 @@ switch ($cmd) {
         ok 'Installation complete!'
         Write-Host '==========================================================='
         Write-Host
+        $appPort = if ($env:APP_PORT) { $env:APP_PORT } else { '8000' }
         Write-Host 'Start the application:'
         Write-Host '    .venv\Scripts\Activate.ps1'
-        Write-Host '    uvicorn bank_audit.web.app:app --host 127.0.0.1 --port 8000'
+        Write-Host "    uvicorn bank_audit.web.app:app --host 127.0.0.1 --port $appPort"
         Write-Host
-        Write-Host 'Open in browser: http://127.0.0.1:8000'
+        Write-Host "Open in browser: http://127.0.0.1:$appPort"
     }
     default {
         error "Unknown command: $cmd"

@@ -111,12 +111,12 @@ python -m bank_audit.cli --help
 
 Пример:
 ```bash
-curl -N -X POST http://127.0.0.1:8000/api/ai/analyze \
+curl -N -X POST http://127.0.0.1:8001/api/ai/analyze \
   -H "Content-Type: application/json" \
   -d '{"question":"Сравни вклады Сбера и ВТБ","deep":true}'
 ```
 
-Полная Swagger-документация: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+Полная Swagger-документация: [http://127.0.0.1:8001/docs](http://127.0.0.1:8001/docs)
 
 ---
 

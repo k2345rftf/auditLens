@@ -10,9 +10,13 @@
 Цель — убедиться что pipeline работает на ЛЮБОЙ теме / банке, а не только
 на тех что я тестировал руками.
 """
-import asyncio, json, time, httpx, sys
+import asyncio, json, os, time, httpx, sys
 
-URL = "http://127.0.0.1:8000/api/ai/analyze"
+from dotenv import load_dotenv
+
+load_dotenv()
+
+URL = f"http://127.0.0.1:{os.getenv('APP_PORT', '8000')}/api/ai/analyze"
 
 # Разные темы, разные банки, разные форматы вопросов — стресс-тест
 TESTS = [
