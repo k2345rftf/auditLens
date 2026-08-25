@@ -1202,3 +1202,145 @@ html, body {
   color: var(--muted);
   padding: 8px 12px;
 }
+
+/* ── RBAC: бейдж пользователя в header ───────────────────────────────────── */
+.lp-user-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.lp-user-badge-id { font-weight: 600; color: var(--fg); }
+.lp-user-badge-sep { color: var(--muted-2); }
+.lp-user-badge-role { color: var(--accent); font-weight: 600; }
+.lp-user-badge-source { color: var(--muted); font-size: 0.7rem; margin-left: 2px; }
+.lp-user-badge-warn {
+  background: #fff4e0;
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* ── RBAC: селект статуса в таблице ──────────────────────────────────────── */
+.lp-status-select {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+.lp-status-select:hover { border-color: var(--accent); }
+.lp-status-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── Кнопка-опасность (удаление) ─────────────────────────────────────────── */
+.lp-btn-danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.lp-btn-danger:hover:not(:disabled) {
+  background: #fce4e4;
+  border-color: var(--bad);
+}
+
+/* ── Admin-модалка «Управление доступом» ─────────────────────────────────── */
+.lp-admin-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 24, 0.55);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lp-admin-dialog {
+  background: var(--panel, #fff);
+  color: var(--fg, #222);
+  border-radius: 12px;
+  width: min(720px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.25);
+  display: flex;
+  flex-direction: column;
+}
+.lp-admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #e0e0e0);
+}
+.lp-admin-header h2 { margin: 0; font-size: 1.05rem; }
+.lp-admin-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border, #e0e0e0);
+}
+.lp-admin-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  color: var(--muted);
+}
+.lp-admin-tab:hover { color: var(--fg); }
+.lp-admin-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.lp-admin-body { padding: 14px 18px 18px; }
+.lp-admin-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.lp-admin-form input,
+.lp-admin-form select {
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+  background: var(--panel, #fff);
+  color: var(--fg, #222);
+}
+.lp-admin-form input { min-width: 200px; flex: 1; }
+.lp-admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lp-admin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border-soft, #f0f0f0);
+  border-radius: 8px;
+  background: var(--bg, #fafafa);
+}
+.lp-admin-row-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lp-admin-row-title { font-weight: 500; font-size: 0.9rem; word-break: break-all; }
+.lp-admin-row-meta { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); }
+.lp-admin-row-meta code {
+  background: var(--border-soft, #f0f0f0);
+  padding: 1px 4px;
+  border-radius: 3px;
+}

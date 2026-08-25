@@ -1,8 +1,9 @@
 """SQL-хелперы модуля loophole: имена таблиц и загрузка миграций.
 
 Весь SQL — через sqlalchemy.text(), без ORM. Миграции 012_loophole.sql,
-013_loophole_agent.sql, 014_loophole_manual_mark.sql и
-015_loophole_parser_shared.sql и 016_loophole_content.sql идемпотентны
+013_loophole_agent.sql, 014_loophole_manual_mark.sql,
+015_loophole_parser_shared.sql, 016_loophole_content.sql и
+020_loophole_auth.sql идемпотентны
 (CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / ADD COLUMN IF NOT EXISTS),
 диалект Greenplum 6 (без PRIMARY KEY / UNIQUE).
 """
@@ -17,6 +18,7 @@ MIGRATION_011_PATH = ROOT / "migrations" / "013_loophole_agent.sql"
 MIGRATION_014_PATH = ROOT / "migrations" / "014_loophole_manual_mark.sql"
 MIGRATION_015_PATH = ROOT / "migrations" / "015_loophole_parser_shared.sql"
 MIGRATION_016_PATH = ROOT / "migrations" / "016_loophole_content.sql"
+MIGRATION_020_PATH = ROOT / "migrations" / "020_loophole_auth.sql"
 
 T_KEYWORD = "loophole_keyword"
 T_RECORD = "loophole_record"
@@ -30,6 +32,9 @@ T_KB_EXAMPLE = "loophole_kb_example"
 T_KB_DOC = "loophole_kb_doc"
 T_PARSER = "loophole_parser"
 T_PARSER_RUN = "loophole_parser_run"
+
+T_ROLE_MAPPING = "loophole_role_mapping"
+T_USER_ROLE = "loophole_user_role"
 
 
 def migration_sql() -> str:
@@ -57,10 +62,16 @@ def migration_016_sql() -> str:
     return MIGRATION_016_PATH.read_text(encoding="utf-8")
 
 
+def migration_020_sql() -> str:
+    """Возвращает текст миграции 020_loophole_auth.sql (RBAC)."""
+    return MIGRATION_020_PATH.read_text(encoding="utf-8")
+
+
 def apply_migration(session) -> None:
-    """Применяет миграции 012 + 013 + 014 + 015 + 016 (идемпотентно)."""
+    """Применяет миграции 012 + 013 + 014 + 015 + 016 + 020 (идемпотентно)."""
     session.execute(text(migration_sql()))
     session.execute(text(migration_011_sql()))
     session.execute(text(migration_014_sql()))
     session.execute(text(migration_015_sql()))
     session.execute(text(migration_016_sql()))
+    session.execute(text(migration_020_sql()))

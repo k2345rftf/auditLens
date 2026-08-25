@@ -1,15 +1,15 @@
 """FastAPI APIRouter модуля loophole: эндпоинты + SSE-чат.
 
-Префикс /api/loophole (монтируется в web/app.py). Авторизация внешняя —
-user_id из заголовка X-User-Id (fallback "anonymous").
+Префикс /api/loophole (монтируется в web/app.py). Авторизация — RBAC через
+.auth: get_current_user + require_action(action) идёт по policy dict[role, action].
 """
 from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Annotated
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -20,6 +20,17 @@ from . import logging_audit
 from . import refine as refine_mod
 from . import repository as repo
 from . import workspace as ws_mod
+from . import auth as auth_mod
+from .auth import (
+    ACT_READ_LOOPHOLES,
+    ACT_CHANGE_STATUS,
+    ACT_CREATE_PARSER,
+    ACT_RUN_PARSER,
+    ACT_DELETE_PARSER,
+    UserPrincipal,
+    get_session,
+    require_action,
+)
 from .chat import graph as chat_graph
 from .chat.state import ChatState
 from .kb import repository as kb_repo
@@ -29,24 +40,30 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Допустимые значения loophole_record.status — для ручного изменения через API.
+# Автоклассификация использует update_verdict (см. repository.py).
+VALID_STATUSES: frozenset[str] = frozenset(
+    {"new", "classified", "in_review", "fixed", "false_positive", "archived"}
+)
+
+
+def _csv_value(value: Any) -> Any:
+    """Заменяет переводы строк в значениях CSV на пробелы."""
+    if isinstance(value, str):
+        return value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return value
+
 
 # ── Dependencies ────────────────────────────────────────────────────────────
-def get_session():
-    """Yield SQLAlchemy-сессию. Переопределяется в тестах через
-    app.dependency_overrides[get_session]."""
-    with db.session() as s:
-        yield s
-
-
-def get_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str:
-    return x_user_id or "anonymous"
+# get_session импортируется из .auth (единое место для override'а тестами).
+# get_current_user / require_action — там же (см. POLICY и resolve_role).
 
 
 # ── Эндпоинты ───────────────────────────────────────────────────────────────
 @router.post("/search")
 def search(
     q: SearchQuery,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
     records = repo.search_relevant(
@@ -58,7 +75,7 @@ def search(
         session=session,
     )
     logging_audit.log_action(
-        user_id, "search",
+        user.user_id, "search",
         detail={"query": q.query_text, "banks": q.bank_slugs},
         session=session,
     )
@@ -66,7 +83,10 @@ def search(
 
 
 @router.get("/keywords")
-def get_keywords(session=Depends(get_session)):
+def get_keywords(
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
     return {"keywords": repo.list_keywords(session=session)}
 
 
@@ -80,13 +100,10 @@ def list_records(
     status: str | None = None,
     limit: int = 500,
     offset: int = 0,
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
-    """Список лазеек из БД для таблицы в основной области UI.
-
-    bank_slugs передаётся строкой через запятую (query-param friendly):
-    /records?bank_slugs=sberbank,vtb
-    """
+    """Список лазеек из БД для таблицы в основной области UI."""
     slugs = (
         [s.strip() for s in bank_slugs.split(",") if s.strip()]
         if bank_slugs else None
@@ -108,18 +125,15 @@ def list_records(
 @router.get("/records/{record_id}/content")
 def record_content(
     record_id: int,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
-    """Полный контент записи — ленивая подгрузка для разворачивающейся строки UI.
-
-    raw_text в списках не отдаётся (payload); только здесь, по явному запросу.
-    """
+    """Полный контент записи — ленивая подгрузка для разворачивающейся строки UI."""
     record = repo.get_record(record_id, session=session)
     if record is None:
         raise HTTPException(status_code=404, detail="record not found")
     logging_audit.log_action(
-        user_id, "view_content",
+        user.user_id, "view_content",
         detail={"record_id": record_id}, session=session,
     )
     return {
@@ -140,15 +154,10 @@ class BackfillRequest(BaseModel):
 @router.post("/records/backfill-content")
 def backfill_content(
     body: BackfillRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CHANGE_STATUS)),
     session=Depends(get_session),
 ):
-    """Догрузка полного контента для legacy/fetch_failed/empty записей.
-
-    Синхронно, порциями limit с паузой delay_ms между fetch'ами (вежливый
-    rate-limit). remaining в ответе — повторный вызов добирает хвост.
-    fetch_failed остаётся в очереди; full/truncated выпадают навсегда.
-    """
+    """Догрузка полного контента для legacy/fetch_failed/empty записей."""
     import time
 
     from . import content_fetch
@@ -174,7 +183,7 @@ def backfill_content(
         )
     remaining = repo.count_records_needing_content(session=session)
     logging_audit.log_action(
-        user_id, "backfill_content",
+        user.user_id, "backfill_content",
         detail={"processed": len(targets), "updated": updated,
                 "failed": failed, "remaining": remaining},
         session=session,
@@ -192,20 +201,15 @@ class VerdictRequest(BaseModel):
 @router.post("/records/verdict")
 def mark_verdict(
     body: VerdictRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CHANGE_STATUS)),
     session=Depends(get_session),
 ):
-    """Ручная маркировка записей: «лазейка» / «обычный запрос».
-
-    Покрывает одиночную (массив из одного id) и массовую маркировку.
-    is_loophole=true → пример добавляется в KB (дедуп по record_id);
-    is_loophole=false → пример удаляется из KB (откат).
-    """
+    """Ручная маркировка записей: «лазейка» / «обычный запрос» (admin/cko)."""
     if not body.record_ids:
         raise HTTPException(status_code=400, detail="record_ids пуст")
     updated: list[int] = []
     skipped: list[int] = []
-    reason = body.comment or f"manual:{user_id}"
+    reason = body.comment or f"manual:{user.user_id}"
     for rid in body.record_ids:
         record = repo.get_record(rid, session=session)
         if record is None:
@@ -238,7 +242,7 @@ def mark_verdict(
             repo.delete_kb_example_by_record(rid, session=session)
         updated.append(rid)
     logging_audit.log_action(
-        user_id, "mark_verdict",
+        user.user_id, "mark_verdict",
         detail={
             "ids": body.record_ids,
             "is_loophole": body.is_loophole,
@@ -249,32 +253,76 @@ def mark_verdict(
     return {"updated": len(updated), "skipped": skipped}
 
 
+class StatusChangeRequest(BaseModel):
+    status: str
+
+
+@router.post("/records/{record_id}/status")
+def change_status(
+    record_id: int,
+    body: StatusChangeRequest,
+    user: UserPrincipal = Depends(require_action(ACT_CHANGE_STATUS)),
+    session=Depends(get_session),
+):
+    """Ручная смена status лазейки (admin/cko). Автоклассификация —
+    через update_verdict (см. repository.py); здесь — только ручной override."""
+    if body.status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status должен быть одним из {sorted(VALID_STATUSES)}",
+        )
+    existing = repo.get_record(record_id, session=session)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="record not found")
+    repo.update_record_status(record_id, body.status, session=session)
+    logging_audit.log_action(
+        user.user_id, "change_status",
+        detail={
+            "record_id": record_id,
+            "new_status": body.status,
+            "old_status": existing.get("status"),
+        },
+        session=session,
+    )
+    return {"record_id": record_id, "status": body.status}
+
+
 @router.get("/banks")
-def list_banks(session=Depends(get_session)):
+def list_banks(
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
     """Уникальные bank_slug из loophole_record — для фильтра таблицы."""
     return {"banks": repo.list_bank_slugs(session=session)}
 
 
 @router.get("/workspaces")
-def list_workspaces(user_id: str = Depends(get_user_id), session=Depends(get_session)):
-    return {"workspaces": ws_mod.list_for_user(user_id, session=session)}
+def list_workspaces(
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
+    return {"workspaces": ws_mod.list_for_user(user.user_id, session=session)}
 
 
 @router.post("/workspace")
 def create_workspace(
     body: WorkspaceCreate,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
-    wid = ws_mod.create(user_id, name=body.name, session=session)
+    wid = ws_mod.create(user.user_id, name=body.name, session=session)
     logging_audit.log_action(
-        user_id, "workspace_create", workspace_id=wid, session=session
+        user.user_id, "workspace_create", workspace_id=wid, session=session
     )
     return {"workspace_id": wid}
 
 
 @router.get("/history/{workspace_id}")
-def history(workspace_id: int, session=Depends(get_session)):
+def history(
+    workspace_id: int,
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
     return {"messages": ws_mod.history(workspace_id, session=session)}
 
 
@@ -282,9 +330,6 @@ class ChatRequest(BaseModel):
     workspace_id: int
     message: str
     history: list[dict] = []
-    # true → уточнение уже пройдено (сообщение — обогащённый запрос после
-    # /clarify/answer). Пропускаем clarify-гейт и идём выполнять. Без этого
-    # /chat заново гонял бы generate_clarifications на КАЖДЫЙ вызов → петля.
     skip_clarify: bool = False
 
 
@@ -292,7 +337,7 @@ class ChatRequest(BaseModel):
 async def chat(
     body: ChatRequest,
     request: Request,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
     """SSE-чат: стримит token/tool_call/tool_result/record события."""
@@ -300,14 +345,13 @@ async def chat(
         "query": body.message,
         "messages": body.history,
         "workspace_id": body.workspace_id,
-        "user_id": user_id,
+        "user_id": user.user_id,
         "session": session,
         "skip_clarify": body.skip_clarify,
     }
-    # Сохраняем сообщение пользователя.
     repo.add_chat_message(body.workspace_id, "user", body.message, session=session)
     logging_audit.log_action(
-        user_id, "chat", workspace_id=body.workspace_id,
+        user.user_id, "chat", workspace_id=body.workspace_id,
         detail={"message": body.message[:200]}, session=session,
     )
 
@@ -315,7 +359,6 @@ async def chat(
         import json as _json
         async for ev in chat_graph.stream_chat(state, session=session):
             yield {"event": ev["event"], "data": _json.dumps(ev["data"], ensure_ascii=False, default=str)}
-        # Сохраняем ответ (если есть).
         try:
             if state.get("answer"):
                 repo.add_chat_message(
@@ -327,13 +370,13 @@ async def chat(
     return EventSourceResponse(event_generator())
 
 
-EXPORT_LIMIT = 10000  # максимум записей в одной выгрузке
+EXPORT_LIMIT = 10000
 
 
 @router.post("/export")
 def export(
     body: ExportRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
     if body.records and len(body.records) > EXPORT_LIMIT:
@@ -351,7 +394,7 @@ def export(
             if r:
                 records.append(r)
     logging_audit.log_action(
-        user_id, "export", detail={"format": body.format, "count": len(records)},
+        user.user_id, "export", detail={"format": body.format, "count": len(records)},
         session=session,
     )
     if body.format == "json":
@@ -370,21 +413,22 @@ def export(
         ])
         for r in records:
             writer.writerow([
-                r.get("record_id"), r.get("title"), r.get("url"),
-                r.get("domain"), r.get("bank_slug"), r.get("keyword"),
-                r.get("trust_score"), r.get("is_loophole"),
-                r.get("verdict_confidence"), r.get("verdict_reason"),
-                r.get("verdict_model"), r.get("status"),
-                r.get("collected_at"), r.get("classified_at"),
-                r.get("content_status"), r.get("raw_text_len"), r.get("raw_text"),
+                _csv_value(r.get("record_id")), _csv_value(r.get("title")),
+                _csv_value(r.get("url")), _csv_value(r.get("domain")),
+                _csv_value(r.get("bank_slug")), _csv_value(r.get("keyword")),
+                _csv_value(r.get("trust_score")), _csv_value(r.get("is_loophole")),
+                _csv_value(r.get("verdict_confidence")),
+                _csv_value(r.get("verdict_reason")),
+                _csv_value(r.get("verdict_model")), _csv_value(r.get("status")),
+                _csv_value(r.get("collected_at")), _csv_value(r.get("classified_at")),
+                _csv_value(r.get("content_status")), _csv_value(r.get("raw_text_len")),
+                _csv_value(r.get("raw_text")),
             ])
-        # BOM для корректного открытия в Excel (Windows).
         return Response(
             content="\ufeff" + buf.getvalue(),
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=loopholes.csv"},
         )
-    # pdf — через pdf_export (Playwright); заглушка для тестов.
     return JSONResponse({"error": "pdf export requires Playwright"}, status_code=501)
 
 
@@ -400,11 +444,10 @@ class FilteredExportRequest(BaseModel):
 @router.post("/export/csv")
 def export_csv_filtered(
     body: FilteredExportRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
-    """Выгрузка CSV по текущим фильтрам таблицы (без передачи ids).
-    Берёт все подходящие записи (limit 10000) и формирует CSV с BOM."""
+    """Выгрузка CSV по текущим фильтрам таблицы (без передачи ids)."""
     records = repo.list_records(
         bank_slugs=body.bank_slugs or None,
         period_from=body.period_from,
@@ -417,7 +460,7 @@ def export_csv_filtered(
         session=session,
     )
     logging_audit.log_action(
-        user_id, "export_csv", detail={"count": len(records)}, session=session,
+        user.user_id, "export_csv", detail={"count": len(records)}, session=session,
     )
     import csv as _csv
     import io as _io
@@ -432,13 +475,16 @@ def export_csv_filtered(
     ])
     for r in records:
         writer.writerow([
-            r.get("record_id"), r.get("title"), r.get("url"),
-            r.get("domain"), r.get("bank_slug"), r.get("keyword"),
-            r.get("trust_score"), r.get("is_loophole"),
-            r.get("verdict_confidence"), r.get("verdict_reason"),
-            r.get("verdict_model"), r.get("status"),
-            r.get("collected_at"), r.get("classified_at"),
-            r.get("content_status"), r.get("raw_text_len"), r.get("raw_text"),
+            _csv_value(r.get("record_id")), _csv_value(r.get("title")),
+            _csv_value(r.get("url")), _csv_value(r.get("domain")),
+            _csv_value(r.get("bank_slug")), _csv_value(r.get("keyword")),
+            _csv_value(r.get("trust_score")), _csv_value(r.get("is_loophole")),
+            _csv_value(r.get("verdict_confidence")),
+            _csv_value(r.get("verdict_reason")),
+            _csv_value(r.get("verdict_model")), _csv_value(r.get("status")),
+            _csv_value(r.get("collected_at")), _csv_value(r.get("classified_at")),
+            _csv_value(r.get("content_status")), _csv_value(r.get("raw_text_len")),
+            _csv_value(r.get("raw_text")),
         ])
     return Response(
         content="\ufeff" + buf.getvalue(),
@@ -447,27 +493,29 @@ def export_csv_filtered(
     )
 
 
+# POST /refine требует ACT_CHANGE_STATUS (admin/cko): refine неявно модифицирует
+# keyword-таблицу, что влияет на дальнейшую классификацию.
 @router.post("/refine")
 async def refine(
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CHANGE_STATUS)),
     session=Depends(get_session),
 ):
     added = await refine_mod.refine_keywords(session=session)
     logging_audit.log_action(
-        user_id, "refine", detail={"added": added}, session=session
+        user.user_id, "refine", detail={"added": added}, session=session
     )
     return {"added": added}
 
 
 @router.post("/collect/run")
 async def collect_run(
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CHANGE_STATUS)),
     session=Depends(get_session),
 ):
-    """Ручной запуск авто-сборщика (для админа)."""
+    """Ручной запуск авто-сборщика (admin/cko): создаёт записи в loophole_record."""
     n = await collector_mod.collect_once(session=session)
     logging_audit.log_action(
-        user_id, "collect", detail={"new_records": n}, session=session
+        user.user_id, "collect", detail={"new_records": n}, session=session
     )
     return {"new_records": n}
 
@@ -486,7 +534,8 @@ class ClarifyAnswerRequest(BaseModel):
 @router.post("/clarify")
 async def clarify(
     body: ClarifyRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
 ):
     """Генерация уточняющих вопросов по запросу аудитора."""
     from .chat import clarify as clarify_mod
@@ -495,8 +544,9 @@ async def clarify(
         body.question, history=body.history
     )
     logging_audit.log_action(
-        user_id, "clarify",
+        user.user_id, "clarify",
         detail={"question": body.question[:200], "complete": result.get("complete")},
+        session=session,
     )
     return result
 
@@ -504,15 +554,17 @@ async def clarify(
 @router.post("/clarify/answer")
 async def clarify_answer(
     body: ClarifyAnswerRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
 ):
     """Сборка обогащённого запроса из исходного вопроса и ответов воронки."""
     from .chat import clarify as clarify_mod
 
     enriched = await clarify_mod.build_enriched_question(body.question, body.answers)
     logging_audit.log_action(
-        user_id, "clarify_answer",
+        user.user_id, "clarify_answer",
         detail={"question": body.question[:200], "enriched_len": len(enriched)},
+        session=session,
     )
     return {"enriched_question": enriched}
 
@@ -530,7 +582,10 @@ class ParserPatchRequest(BaseModel):
 
 
 @router.get("/parsers")
-def list_parsers(session=Depends(get_session)):
+def list_parsers(
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
     """Общий каталог парсеров всех пользователей + статистика карточек."""
     from .parsers import registry as parser_registry
 
@@ -540,7 +595,7 @@ def list_parsers(session=Depends(get_session)):
 @router.post("/parsers")
 async def create_parser(
     body: ParserCreateRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CREATE_PARSER)),
     session=Depends(get_session),
 ):
     """Создание парсера: дедуп источников (409 при полном дубле) + LLM-генерация."""
@@ -567,10 +622,8 @@ async def create_parser(
             },
         )
     try:
-        # session=None: фоновая валидация переживает запрос; repo-функции сами
-        # открывают db.session() с commit (request-session не коммитит фон).
         result = await parser_generator.generate_parser(
-            user_id, body.workspace_id, body.query, session=None
+            user.user_id, body.workspace_id, body.query, session=None
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
@@ -580,7 +633,7 @@ async def create_parser(
             for c in conflicts for o in c["overlap"]
         ]
     logging_audit.log_action(
-        user_id, "parser_create",
+        user.user_id, "parser_create",
         workspace_id=body.workspace_id,
         detail={"parser_id": result.get("parser_id"), "query": body.query[:200]},
         session=session,
@@ -598,7 +651,7 @@ async def create_parser(
 def patch_parser(
     parser_id: int,
     body: ParserPatchRequest,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CREATE_PARSER)),
     session=Depends(get_session),
 ):
     """Редактирование: имя, cron (валидация croniter), вкл/выкл автозапуска."""
@@ -607,7 +660,6 @@ def patch_parser(
     row = repo.get_parser(parser_id, session=session)
     if row is None:
         raise HTTPException(status_code=404, detail="parser not found")
-    # cron_expr: None в теле = не менять; "" = очистить (расписание не настроено).
     if body.cron_expr is not None:
         cron_expr = body.cron_expr or None
     else:
@@ -630,12 +682,12 @@ def patch_parser(
         cron_expr=cron_expr,
         auto_enabled=auto_enabled,
         next_run_at=nxt,
-        last_edited_by=user_id,
+        last_edited_by=user.user_id,
         name=body.name,
         session=session,
     )
     logging_audit.log_action(
-        user_id, "parser_edit",
+        user.user_id, "parser_edit",
         detail={"parser_id": parser_id, "cron": cron_expr, "auto": auto_enabled},
         session=session,
     )
@@ -647,22 +699,20 @@ def patch_parser(
 @router.post("/parsers/{parser_id}/run")
 async def run_parser(
     parser_id: int,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_RUN_PARSER)),
     session=Depends(get_session),
 ):
     """Ручной запуск парсера. Возвращает run_id для SSE-подписки на лог."""
     from .parsers import runner as runner_mod
 
     try:
-        # session=None: фоновая wait() переживает запрос; repo-функции сами
-        # открывают db.session() с commit (request-session не коммитит фон).
         run_id = await runner_mod.run(parser_id, "manual")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     logging_audit.log_action(
-        user_id, "parser_run",
+        user.user_id, "parser_run",
         detail={"parser_id": parser_id, "run_id": run_id},
         session=session,
     )
@@ -672,7 +722,7 @@ async def run_parser(
 @router.post("/parsers/{parser_id}/stop")
 async def stop_parser(
     parser_id: int,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_RUN_PARSER)),
     session=Depends(get_session),
 ):
     """Останов запущенного парсера. 404 если не running."""
@@ -683,7 +733,7 @@ async def stop_parser(
         raise HTTPException(status_code=404, detail="parser not running")
     await runner.stop()
     logging_audit.log_action(
-        user_id, "parser_stop", detail={"parser_id": parser_id}, session=session,
+        user.user_id, "parser_stop", detail={"parser_id": parser_id}, session=session,
     )
     return {"parser_id": parser_id, "stopped": True}
 
@@ -691,6 +741,7 @@ async def stop_parser(
 @router.get("/parsers/{parser_id}/status")
 async def parser_status(
     parser_id: int,
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
     session=Depends(get_session),
 ):
     """Статус парсера: runtime (если running) + запись из БД."""
@@ -709,14 +760,22 @@ async def parser_status(
 
 
 @router.get("/parsers/{parser_id}/runs")
-def list_parser_runs(parser_id: int, session=Depends(get_session)):
+def list_parser_runs(
+    parser_id: int,
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
     """История запусков (последние 20)."""
     return {"runs": repo.list_runs(parser_id, session=session)}
 
 
 @router.get("/parsers/{parser_id}/log/stream")
-async def parser_log_stream(parser_id: int, run_id: int):
-    """SSE-стрим лога запуска: события 'log' (строка) и 'done' (финал)."""
+async def parser_log_stream(
+    parser_id: int,
+    run_id: int,
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+):
+    """SSE-стрим лога запуска."""
     from .parsers import runner as runner_mod
 
     queue = runner_mod.subscribe(run_id)
@@ -739,7 +798,7 @@ async def parser_log_stream(parser_id: int, run_id: int):
 @router.post("/parsers/{parser_id}/heal")
 async def heal_parser(
     parser_id: int,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_CREATE_PARSER)),
     session=Depends(get_session),
 ):
     """Ручной запуск анализа и восстановления парсера nanobot'ом."""
@@ -754,7 +813,7 @@ async def heal_parser(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     logging_audit.log_action(
-        user_id, "parser_heal",
+        user.user_id, "parser_heal",
         detail={"parser_id": parser_id, "run_id": run_id},
         session=session,
     )
@@ -764,10 +823,10 @@ async def heal_parser(
 @router.delete("/parsers/{parser_id}")
 def delete_parser(
     parser_id: int,
-    user_id: str = Depends(get_user_id),
+    user: UserPrincipal = Depends(require_action(ACT_DELETE_PARSER)),
     session=Depends(get_session),
 ):
-    """Удаление парсера (код + запись БД). 409 если running, 404 если не найден."""
+    """Удаление парсера (admin only). 409 если running, 404 если не найден."""
     from .parsers import registry as parser_registry
     from .parsers.runner import _RUNNING
 
@@ -777,7 +836,7 @@ def delete_parser(
     if not deleted:
         raise HTTPException(status_code=404, detail="parser not found")
     logging_audit.log_action(
-        user_id, "parser_delete", detail={"parser_id": parser_id}, session=session,
+        user.user_id, "parser_delete", detail={"parser_id": parser_id}, session=session,
     )
     return {"deleted": True}
 
@@ -795,7 +854,11 @@ class TableLoadRequest(BaseModel):
 
 
 @router.post("/table/load")
-def table_load(body: TableLoadRequest, session=Depends(get_session)):
+def table_load(
+    body: TableLoadRequest,
+    user: UserPrincipal = Depends(require_action(ACT_READ_LOOPHOLES)),
+    session=Depends(get_session),
+):
     """Применяет фильтры и возвращает records для таблицы UI."""
     records = repo.list_records(
         bank_slugs=body.bank_slugs or None,
@@ -809,3 +872,8 @@ def table_load(body: TableLoadRequest, session=Depends(get_session)):
         session=session,
     )
     return {"records": records, "count": len(records)}
+
+
+# ── Подключение admin-роутера (CRUD маппинга групп/ролей) ──────────────────
+from .auth_admin import router as auth_admin_router
+router.include_router(auth_admin_router)

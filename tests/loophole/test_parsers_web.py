@@ -10,7 +10,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from bank_audit.loophole.web import router, get_session, get_user_id
+from bank_audit.loophole.web import router, get_session
+from bank_audit.loophole.auth import UserPrincipal, get_current_user
 from bank_audit.loophole import repository as repo
 from bank_audit.loophole.parsers import runner as runner_mod
 
@@ -39,7 +40,10 @@ def client(app_session):
     app = FastAPI()
     app.include_router(router, prefix="/api/loophole")
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_user_id] = lambda: "test-user"
+    # override auth: admin — полные права (parsers требуют ACT_CREATE_PARSER / ACT_RUN_PARSER)
+    app.dependency_overrides[get_current_user] = lambda: UserPrincipal(
+        user_id="test-user", email=None, groups=[], role="admin", source="test"
+    )
     with TestClient(app) as c:
         yield c
 

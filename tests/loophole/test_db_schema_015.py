@@ -44,5 +44,8 @@ def test_apply_migration_includes_015():
             calls.append(str(clause))
 
     schema.apply_migration(_FakeSession())
-    assert len(calls) == 5
+    # 012 + 013 + 014 + 015 + 016 + 020 — шесть миграций выполняются идемпотентно.
+    assert len(calls) == 6
+    # Индексы: 0=010, 1=011, 2=014, 3=015, 4=016, 5=020.
     assert "loophole_parser_run" in calls[3]
+    assert "loophole_role_mapping" in calls[5] 

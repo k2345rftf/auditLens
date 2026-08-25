@@ -225,6 +225,16 @@ def get_record(record_id: int, *, session=None) -> dict | None:
         return dict(row) if row else None
 
 
+def update_record_status(record_id: int, status: str, *, session=None) -> None:
+    """Меняет loophole_record.status. Только проставляет статус, ничего больше.
+    НЕ вызывается автоматической классификацией (та использует update_verdict)."""
+    with _session(session) as s:
+        s.execute(
+            text(f"UPDATE {schema.T_RECORD} SET status = :st WHERE record_id = :id"),
+            {"st": status, "id": record_id},
+        )
+
+
 def list_records(
     *,
     bank_slugs: list[str] | None = None,

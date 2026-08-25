@@ -152,6 +152,22 @@ CREATE TABLE loophole_parser_run (
     log_tail     TEXT,
     heal_report  TEXT
 );
+
+CREATE TABLE loophole_role_mapping (
+    group_name  TEXT,
+    role_name   TEXT,
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_lrm_group ON loophole_role_mapping(group_name);
+
+CREATE TABLE loophole_user_role (
+    user_id     TEXT,
+    role_name   TEXT,
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by  TEXT,
+    note        TEXT
+);
+CREATE INDEX idx_lur_user ON loophole_user_role(user_id);
 """
 
 

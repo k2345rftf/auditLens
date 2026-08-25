@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from bank_audit.loophole.web import router, get_session, get_user_id
+from bank_audit.loophole.web import router, get_session
+from bank_audit.loophole.auth import UserPrincipal, get_current_user
 from bank_audit.loophole import repository as repo
 from bank_audit.loophole import keywords as kw_mod
 from bank_audit.loophole.models import LoopholeRecord
@@ -45,10 +46,16 @@ def client(app_session):
     def override_session():
         yield app_session
 
+    # override auth: test-user с ролью admin (полные права на все действия)
+    def override_user():
+        return UserPrincipal(
+            user_id="test-user", email=None, groups=[], role="admin", source="test"
+        )
+
     app = FastAPI()
     app.include_router(router, prefix="/api/loophole")
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_user_id] = lambda: "test-user"
+    app.dependency_overrides[get_current_user] = override_user
     with TestClient(app) as c:
         yield c
 

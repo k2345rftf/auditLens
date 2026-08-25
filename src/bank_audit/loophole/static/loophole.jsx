@@ -96,6 +96,138 @@ function LoopholeApp() {
     }).catch(() => {});
   }, []);
 
+  // ── RBAC: идентичность текущего пользователя / роли / actions ──────────────
+  const [me, setMe] = useState(null);     // null = не загружено
+  const [meError, setMeError] = useState(null);
+  const has = (action) => !!(me && Array.isArray(me.actions) && me.actions.includes(action));
+
+  useEffect(() => {
+    fetch(`${API}/auth/me`).then(r => {
+      if (r.status === 401) {
+        setMe(null);
+        setMeError("auth not configured");
+        return null;
+      }
+      if (!r.ok) {
+        setMe(null);
+        setMeError(`HTTP ${r.status}`);
+        return null;
+      }
+      return r.json();
+    }).then(d => {
+      if (d) { setMe(d); setMeError(null); }
+    }).catch(() => { setMe(null); setMeError("network error"); });
+  }, []);
+
+  // ── RBAC: ручная смена статуса (admin/cko) ────────────────────────────────
+  const changeRecordStatus = async (recordId, newStatus) => {
+    try {
+      const r = await fetch(`${API}/records/${recordId}/status`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({status: newStatus}),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        setToast(`Не удалось изменить статус: HTTP ${r.status} — ${txt}`);
+        return;
+      }
+      setRecords(prev => prev.map(rec =>
+        rec.record_id === recordId ? {...rec, status: newStatus} : rec
+      ));
+    } catch (e) {
+      setToast("Ошибка сети при изменении статуса: " + String(e));
+    }
+  };
+
+  // ── RBAC: админ-панель «Управление доступом» ──────────────────────────────
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState("mappings");
+  const [roleMappings, setRoleMappings] = useState([]);
+  const [userRoles, setUserRoles] = useState([]);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupRole, setNewGroupRole] = useState("user");
+  const [newUserId, setNewUserId] = useState("");
+  const [newUserRole, setNewUserRole] = useState("user");
+  const [newUserNote, setNewUserNote] = useState("");
+
+  const ROLE_OPTIONS = ["admin", "cko", "parser_dev", "user"];
+  const STATUS_OPTIONS = ["new", "classified", "in_review", "fixed", "false_positive", "archived"];
+
+  const loadRoleMappings = () => {
+    fetch(`${API}/auth/role-mappings`).then(r => r.ok ? r.json() : [])
+      .then(d => setRoleMappings(Array.isArray(d) ? d : [])).catch(() => {});
+  };
+  const loadUserRoles = () => {
+    fetch(`${API}/auth/user-roles`).then(r => r.ok ? r.json() : [])
+      .then(d => setUserRoles(Array.isArray(d) ? d : [])).catch(() => {});
+  };
+
+  const addRoleMapping = async () => {
+    if (!newGroupName.trim()) return;
+    const r = await fetch(`${API}/auth/role-mappings`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({group_name: newGroupName.trim(), role_name: newGroupRole}),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      setToast(`Не удалось добавить маппинг: HTTP ${r.status} — ${t}`);
+      return;
+    }
+    setNewGroupName("");
+    setNewGroupRole("user");
+    loadRoleMappings();
+  };
+
+  const deleteRoleMapping = async (groupName) => {
+    const r = await fetch(`${API}/auth/role-mappings/${encodeURIComponent(groupName)}`,
+                           {method: "DELETE"});
+    if (!r.ok && r.status !== 404) {
+      setToast(`Не удалось удалить маппинг: HTTP ${r.status}`);
+    }
+    loadRoleMappings();
+  };
+
+  const addUserRole = async () => {
+    if (!newUserId.trim()) return;
+    const r = await fetch(`${API}/auth/user-roles`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        user_id: newUserId.trim(),
+        role_name: newUserRole,
+        note: newUserNote.trim() || null,
+      }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      setToast(`Не удалось сохранить override: HTTP ${r.status} — ${t}`);
+      return;
+    }
+    setNewUserId("");
+    setNewUserRole("user");
+    setNewUserNote("");
+    loadUserRoles();
+  };
+
+  const deleteUserRole = async (uid) => {
+    const r = await fetch(`${API}/auth/user-roles/${encodeURIComponent(uid)}`,
+                           {method: "DELETE"});
+    if (!r.ok && r.status !== 404) {
+      setToast(`Не удалось удалить override: HTTP ${r.status}`);
+    }
+    loadUserRoles();
+  };
+
+  // Авто-загрузка списков при открытии админ-модалки.
+  useEffect(() => {
+    if (adminOpen && me && me.role === "admin") {
+      loadRoleMappings();
+      loadUserRoles();
+    }
+  }, [adminOpen]);
+
   // Загружаем записи.
   const loadRecords = useCallback(async () => {
     setLoading(true);
@@ -737,6 +869,24 @@ function LoopholeApp() {
         <header className="lp-main-header">
           <h1>Лазейки и уязвимости в продуктах банка</h1>
           <div className="lp-header-actions">
+            {/* RBAC: бейдж пользователя */}
+            {me ? (
+              <span className="lp-user-badge"
+                    title={`email: ${me.email || "—"} · groups: ${(me.groups || []).join(",") || "—"}`}>
+                <span className="lp-user-badge-id">{me.user_id || "(anonymous)"}</span>
+                <span className="lp-user-badge-sep">·</span>
+                <span className="lp-user-badge-role">{me.role || "user"}</span>
+                <span className="lp-user-badge-source">({me.source || "header"})</span>
+              </span>
+            ) : meError ? (
+              <span className="lp-user-badge lp-user-badge-warn" title={meError}>{meError}</span>
+            ) : null}
+            {me && me.role === "admin" && (
+              <button className="lp-btn" onClick={() => setAdminOpen(true)}
+                      title="CRUD маппинга ролей и override'ов пользователей">
+                🛡 Управление доступом
+              </button>
+            )}
             <span className="lp-count-badge">
               {loading ? "…" : sortedRecords.length} записей
             </span>
@@ -928,8 +1078,21 @@ function LoopholeApp() {
                                 title="Вердикт проставлен вручную">ручная</span>
                         )}
                       </td>
-                      <td>
-                        <span className="lp-status">{r.status || "—"}</span>
+                      <td onClick={e => e.stopPropagation()}>
+                        {has("change_status") ? (
+                          <select
+                            className="lp-status-select"
+                            value={r.status || "new"}
+                            onChange={e => changeRecordStatus(r.record_id, e.target.value)}
+                            title="Изменить статус лазейки (admin/cko)"
+                          >
+                            {STATUS_OPTIONS.map(s => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="lp-status">{r.status || "—"}</span>
+                        )}
                       </td>
                       <td className="lp-cell-date">{fmtDate(r.collected_at)}</td>
                       <td className="lp-cell-url">
@@ -1147,7 +1310,8 @@ function LoopholeApp() {
               />
               <button className="lp-btn lp-btn-primary"
                       onClick={createParser}
-                      disabled={parsersBusy || !newParserQuery.trim()}>
+                      disabled={parsersBusy || !newParserQuery.trim() || !has("create_parser")}
+                      title={has("create_parser") ? "Сгенерировать новый парсер" : "Нет прав (нужна роль parser_dev или admin)"}>
                 Создать
               </button>
             </div>
@@ -1237,22 +1401,26 @@ function LoopholeApp() {
                     <div className="lp-parser-actions">
                       <button className="lp-btn lp-btn-sm"
                               onClick={() => startParser(p.parser_id)}
-                              disabled={parsersBusy || p.is_running}>
+                              disabled={parsersBusy || p.is_running || !has("run_parser")}
+                              title={has("run_parser") ? "Запустить парсер" : "Нет прав (нужна роль parser_dev или admin)"}>
                         ▶ Запустить
                       </button>
                       <button className="lp-btn lp-btn-sm"
                               onClick={() => stopParser(p.parser_id)}
-                              disabled={parsersBusy || !p.is_running}>
+                              disabled={parsersBusy || !p.is_running || !has("run_parser")}
+                              title={has("run_parser") ? "Остановить парсер" : "Нет прав"}>
                         ■
                       </button>
                       <button className="lp-btn lp-btn-sm"
                               onClick={() => openEdit(p)}
-                              disabled={parsersBusy}>
+                              disabled={parsersBusy || !has("create_parser")}
+                              title="Редактировать (parser_dev/admin)">
                         Редактировать
                       </button>
-                      <button className="lp-btn lp-btn-sm"
+                      <button className="lp-btn lp-btn-sm lp-btn-danger"
                               onClick={() => deleteParser(p.parser_id)}
-                              disabled={parsersBusy || p.is_running}>
+                              disabled={parsersBusy || p.is_running || !has("delete_parser")}
+                              title={has("delete_parser") ? "Удалить парсер" : "Нет прав (только admin)"}>
                         Удалить
                       </button>
                     </div>
@@ -1365,6 +1533,116 @@ function LoopholeApp() {
 
       {/* ── Toast-уведомление об ошибке ─────────────────────────────────────── */}
       {toast && <div className="lp-toast" role="alert">{toast}</div>}
+
+      {/* ── Админ-модалка: управление доступом ───────────────────────────────── */}
+      {adminOpen && me && me.role === "admin" && (
+        <div className="lp-admin-modal" onClick={() => setAdminOpen(false)}>
+          <div className="lp-admin-dialog" onClick={e => e.stopPropagation()}>
+            <div className="lp-admin-header">
+              <h2>Управление доступом</h2>
+              <button className="lp-btn" onClick={() => setAdminOpen(false)}>✕</button>
+            </div>
+            <div className="lp-admin-tabs">
+              <button className={"lp-admin-tab " + (adminTab === "mappings" ? "lp-admin-tab-active" : "")}
+                      onClick={() => setAdminTab("mappings")}>
+                Маппинг групп → ролей
+              </button>
+              <button className={"lp-admin-tab " + (adminTab === "overrides" ? "lp-admin-tab-active" : "")}
+                      onClick={() => setAdminTab("overrides")}>
+                Override ролей пользователей
+              </button>
+            </div>
+            <div className="lp-admin-body">
+              {adminTab === "mappings" && (
+                <>
+                  <div className="lp-admin-form">
+                    <input
+                      type="text"
+                      placeholder="group_name (например, uabora/admins)"
+                      value={newGroupName}
+                      onChange={e => setNewGroupName(e.target.value)}
+                    />
+                    <select value={newGroupRole}
+                            onChange={e => setNewGroupRole(e.target.value)}>
+                      {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                    <button className="lp-btn lp-btn-primary"
+                            onClick={addRoleMapping}
+                            disabled={!newGroupName.trim()}>
+                      Добавить
+                    </button>
+                  </div>
+                  <div className="lp-admin-list">
+                    {roleMappings.length === 0 && (
+                      <div className="lp-empty-state">Маппинг пуст. Добавьте первую запись.</div>
+                    )}
+                    {roleMappings.map(m => (
+                      <div key={m.group_name} className="lp-admin-row">
+                        <div className="lp-admin-row-info">
+                          <div className="lp-admin-row-title">{m.group_name}</div>
+                          <div className="lp-admin-row-meta">→ <code>{m.role_name}</code></div>
+                        </div>
+                        <button className="lp-btn lp-btn-sm lp-btn-danger"
+                                onClick={() => deleteRoleMapping(m.group_name)}>
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {adminTab === "overrides" && (
+                <>
+                  <div className="lp-admin-form">
+                    <input
+                      type="text"
+                      placeholder="user_id"
+                      value={newUserId}
+                      onChange={e => setNewUserId(e.target.value)}
+                    />
+                    <select value={newUserRole}
+                            onChange={e => setNewUserRole(e.target.value)}>
+                      {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="note (опц.)"
+                      value={newUserNote}
+                      onChange={e => setNewUserNote(e.target.value)}
+                    />
+                    <button className="lp-btn lp-btn-primary"
+                            onClick={addUserRole}
+                            disabled={!newUserId.trim()}>
+                      Добавить
+                    </button>
+                  </div>
+                  <div className="lp-admin-list">
+                    {userRoles.length === 0 && (
+                      <div className="lp-empty-state">Override'ы отсутствуют.</div>
+                    )}
+                    {userRoles.map(u => (
+                      <div key={u.user_id + u.role_name} className="lp-admin-row">
+                        <div className="lp-admin-row-info">
+                          <div className="lp-admin-row-title">{u.user_id}</div>
+                          <div className="lp-admin-row-meta">
+                            <code>{u.role_name}</code>
+                            {u.note && <> · {u.note}</>}
+                            {u.created_by && <> · автор: {u.created_by}</>}
+                          </div>
+                        </div>
+                        <button className="lp-btn lp-btn-sm lp-btn-danger"
+                                onClick={() => deleteUserRole(u.user_id)}>
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
