@@ -144,8 +144,9 @@ def _public_finding(finding: dict[str, Any], *, research_id: int) -> dict[str, A
     fields = (
         "title", "url", "snippet", "evidence_quote", "description", "category", "severity",
         "bank_slug", "source_title", "published_at", "collected_at", "is_loophole",
-        "record_id", "candidate_id", "source_id", "verdict_confidence", "verdict_reason",
-        "verdict_model", "content_status", "raw_text_len", "raw_text_truncated",
+        "finding_type", "record_id", "candidate_id", "source_id", "verdict_confidence",
+        "verdict_reason", "verdict_model", "content_status", "raw_text_len",
+        "raw_text_truncated",
     )
     public = {}
     for key in fields:

@@ -1958,8 +1958,13 @@ function LoopholeApp() {
   const restoredResearch = !phase && (chat.length > 0 || savedReports.length > 0);
 
   const recordClassification = (r) => r.classification
-    || (r.is_loophole === true ? "vulnerability"
-      : r.is_loophole === false ? "not_confirmed" : null);
+    // Карточки находок из SSE не несут classification: тип восстанавливаем
+    // из finding_type (fraud_scheme не должна выглядеть лазейкой). Отрицательный
+    // вердикт важнее типа — зеркалит инвариант repository.update_verdict.
+    || (r.is_loophole === false ? "not_confirmed"
+      : r.is_loophole === true
+        ? (r.finding_type === "fraud_scheme" ? "fraud_scheme" : "vulnerability")
+        : null);
   const verdictLabel = (r) => ({
     vulnerability: "уязвимость",
     fraud_scheme: "мошенническая схема",

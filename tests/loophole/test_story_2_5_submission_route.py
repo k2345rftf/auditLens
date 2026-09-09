@@ -40,6 +40,7 @@ def _create_submission_schema(session) -> None:
             description TEXT NOT NULL,
             severity TEXT NOT NULL,
             is_loophole INTEGER NOT NULL,
+            finding_type TEXT NOT NULL DEFAULT 'loophole',
             model_is_loophole INTEGER,
             model_confidence REAL,
             model_reason TEXT,

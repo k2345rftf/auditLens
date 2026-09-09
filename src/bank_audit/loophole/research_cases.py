@@ -18,6 +18,17 @@ from .models import LoopholeRecord
 log = logging.getLogger(__name__)
 
 
+def normalize_finding_type(value: Any) -> str:
+    """Приводит тип находки к CHECK миграции 067.
+
+    Значению модели и вызывающего кода не доверяем: регистр, пробелы и дефисы
+    нормализуются ('Fraud scheme' → 'fraud_scheme'), всё неизвестное — к
+    'loophole'.
+    """
+    normalized = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return normalized if normalized in ("loophole", "fraud_scheme") else "loophole"
+
+
 def _normalize_published_at(value: Any) -> date | datetime | None:
     """Приводит published_at к типу, принимаемому timestamptz.
 
@@ -58,6 +69,7 @@ class CaseContractV1:
     category: str | None
     severity: str
     is_loophole: bool
+    finding_type: str = "loophole"
 
 
 class ResearchCaseService:
@@ -190,6 +202,7 @@ class ResearchCaseService:
                 description=str(finding.get("description") or finding.get("snippet") or "").strip(),
                 severity=str(finding.get("severity") or "medium"),
                 is_loophole=bool(finding.get("is_loophole")),
+                finding_type=str(finding.get("finding_type") or "loophole"),
             )
             if candidate_id is not None:
                 candidate_ids.append(candidate_id)
@@ -291,6 +304,7 @@ class ResearchCaseService:
                     description=str(item.get("description") or ""),
                     severity=str(item.get("severity") or "medium"),
                     is_loophole=bool(item.get("is_loophole", False)),
+                    finding_type=str(item.get("finding_type") or "loophole"),
                 )
                 if candidate_id is not None:
                     candidate_ids.append(candidate_id)
@@ -312,6 +326,7 @@ class ResearchCaseService:
         description: str,
         severity: str,
         is_loophole: bool,
+        finding_type: str = "loophole",
     ) -> int | None:
         """Добавляет кандидат лишь из успешно извлечённого источника этого же запуска."""
         contract = CaseContractV1(
@@ -321,13 +336,17 @@ class ResearchCaseService:
             category=category,
             severity=severity,
             is_loophole=is_loophole,
+            # CHECK миграции 067: неизвестный тип от вызывающего кода не
+            # должен ронять запись — нормализуем к лазейке.
+            finding_type=normalize_finding_type(finding_type),
         )
         return self._session.execute(
             text(
                 "INSERT INTO loophole_research_candidate "
-                "(research_id, source_id, title, evidence, category, description, severity, is_loophole) "
+                "(research_id, source_id, title, evidence, category, description, severity, "
+                "is_loophole, finding_type) "
                 "SELECT :research_id, source.source_id, :title, :evidence, :category, "
-                ":description, :severity, :is_loophole "
+                ":description, :severity, :is_loophole, :finding_type "
                 "FROM loophole_research_source AS source "
                 "WHERE source.source_id = :source_id AND source.research_id = :research_id "
                 "AND source.status = 'fetched' "
@@ -460,6 +479,7 @@ class ResearchCaseService:
                 "SELECT candidate.candidate_id, candidate.research_id, candidate.source_id, "
                 "candidate.draft_version, candidate.title, candidate.evidence, "
                 "candidate.description, candidate.category, candidate.severity, candidate.is_loophole, "
+                "candidate.finding_type, "
                 "candidate.model_is_loophole, candidate.model_confidence, candidate.model_reason, "
                 "candidate.model_name, research.workspace_id "
                 "FROM loophole_research_candidate AS candidate "
@@ -512,6 +532,7 @@ class ResearchCaseService:
                 "category",
                 "severity",
                 "is_loophole",
+                "finding_type",
                 "model_is_loophole",
                 "model_confidence",
                 "model_reason",
@@ -586,7 +607,9 @@ class ResearchCaseService:
         как BOOL_OR по его кандидатам; повторный перенос source_id идемпотентно
         возвращается как skipped. Колонка ``is_loophole`` кандидата NOT NULL
         (миграция 045), поэтому фильтр COALESCE(...) IS NOT NULL пропускает
-        всех исторических кандидатов.
+        всех исторических кандидатов. Положительный вердикт по кандидату типа
+        fraud_scheme (миграция 067) даёт записи каталога classification
+        'fraud_scheme' вместо 'vulnerability'.
         """
         workspace_id = self.research_workspace_id(research_id)
         if workspace_id is None:
@@ -597,7 +620,11 @@ class ResearchCaseService:
                 "source.extracted_text, source.published_at, candidate.title AS candidate_title, "
                 "MAX(COALESCE(candidate.model_confidence, 0.0)) AS confidence, "
                 "MAX(CASE WHEN COALESCE(candidate.model_is_loophole, candidate.is_loophole) = TRUE "
-                "THEN 1 ELSE 0 END) AS effective_is_loophole "
+                "THEN 1 ELSE 0 END) AS effective_is_loophole, "
+                "(SELECT MAX(CASE WHEN other.finding_type = 'fraud_scheme' "
+                "AND COALESCE(other.model_is_loophole, other.is_loophole) = TRUE "
+                "THEN 1 ELSE 0 END) FROM loophole_research_candidate AS other "
+                "WHERE other.source_id = source.source_id) AS has_fraud_scheme "
                 "FROM loophole_research_source AS source "
                 "JOIN loophole_research_candidate AS candidate "
                 "ON candidate.source_id = source.source_id "
@@ -642,8 +669,18 @@ class ResearchCaseService:
                     is_loophole=effective_is_loophole,
                     # Явный classification: insert_record дефолта не имеет,
                     # инвариант согласованности — repository.update_verdict.
+                    # fraud приоритетнее loophole: у источника с положительным
+                    # вердиктом и находками обоих типов запись получает тип
+                    # мошеннической схемы (has_fraud_scheme считается по всем
+                    # кандидатам источника, а не по группе одного названия).
+                    # Находка типа fraud_scheme с отрицательным вердиктом
+                    # осознанно уходит в 'not_confirmed': знак вердикта важнее
+                    # типа (инвариант update_verdict — is_loophole равен
+                    # (classification != 'not_confirmed')).
                     classification=(
-                        "vulnerability" if effective_is_loophole else "not_confirmed"
+                        "fraud_scheme"
+                        if effective_is_loophole and row["has_fraud_scheme"]
+                        else "vulnerability" if effective_is_loophole else "not_confirmed"
                     ),
                     verdict_confidence=float(row["confidence"]),
                     verdict_reason="Предварительная оценка из AI-исследования",
@@ -923,7 +960,8 @@ class ResearchCaseService:
             text(
                 "SELECT candidate.candidate_id, candidate.research_id, candidate.title, "
                 "candidate.evidence, candidate.description, candidate.category, candidate.severity, "
-                "candidate.is_loophole, source.url AS source_url, research.search_params "
+                "candidate.is_loophole, candidate.finding_type, "
+                "source.url AS source_url, research.search_params "
                 "FROM loophole_research_candidate AS candidate "
                 "JOIN loophole_research_source AS source ON source.source_id = candidate.source_id "
                 "JOIN loophole_research AS research ON research.research_id = candidate.research_id "

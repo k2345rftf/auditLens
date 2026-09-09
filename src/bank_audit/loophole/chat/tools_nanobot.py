@@ -19,6 +19,7 @@ from ..config import LoopholeSettings
 from ..models import LoopholeRecord
 from ..network_io import run_blocking_network
 from ..pii_mask import mask as pii_mask
+from ..research_cases import normalize_finding_type
 from ...research.llm_throttle import (
     extract_retry_after,
     is_rate_limit_error,
@@ -441,6 +442,9 @@ async def extract_loopholes(
             "severity": str(item.get("severity") or "medium"),
             "evidence_quote": str(item.get("evidence_quote") or ""),
             "is_loophole": raw_verdict if raw_verdict is True or raw_verdict is False else None,
+            # Типу находки модели не доверяем: регистр/пробелы/дефисы
+            # нормализуются, всё неизвестное — к обычной лазейке.
+            "finding_type": normalize_finding_type(item.get("finding_type")),
         })
     return out
 
@@ -486,6 +490,7 @@ def _queue_confirmed_findings(
             "category": str(finding.get("category") or "") or None,
             "severity": str(finding.get("severity") or "medium"),
             "is_loophole": finding["is_loophole"],
+            "finding_type": normalize_finding_type(finding.get("finding_type")),
         })
 
 

@@ -194,13 +194,18 @@ def candidate_report(records: list[dict]) -> str:
         date_line = f"Дата публикации: {record.get('published_at') or 'не установлена'}"
         if not record.get("published_at") and record.get("estimated_published_at"):
             date_line += f" (оценочная: {record['estimated_published_at']})"
-        parts.extend([
-            f"{index}. {record['title']}",
+        block = [f"{index}. {record['title']}"]
+        # Тип находки виден в тексте отчёта: мошенническая схема не должна
+        # смешиваться с лазейками.
+        if record.get("finding_type") == "fraud_scheme":
+            block.append("Тип: мошенническая схема")
+        block.extend([
             f"Механизм по источнику: {record.get('description') or record.get('snippet')}",
             f"Цитата: {record['evidence_quote']}",
             f"Источник: {record['url']}",
             date_line,
         ])
+        parts.extend(block)
     parts.append("Рекомендация аудитору: сверить механизм с условиями продукта и доказательствами.")
     return redact_stream_text("\n\n".join(parts))
 

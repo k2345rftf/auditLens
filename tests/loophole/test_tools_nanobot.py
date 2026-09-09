@@ -86,7 +86,11 @@ def test_nanobot_prompt_requires_wide_separate_fraud_research():
     assert "Мошеннические схемы" in prompt
     assert "релевантного проверенного источника" in prompt
     assert "не объявляй форум первоисточником" in prompt
-    assert "не передавай мошеннические материалы" in prompt
+    # Мошеннические материалы передаются в извлечение и сохраняются отдельным
+    # типом находки; запрета на передачу в audit_extract_loopholes больше нет.
+    assert "не передавай мошеннические материалы" not in prompt
+    assert "finding_type='fraud_scheme'" in prompt
+    assert "не называй такую схему" in prompt
     assert "audit_extract_loopholes" in prompt
     assert "published_at" in prompt
     assert "не расширяй период" in prompt
@@ -191,6 +195,49 @@ async def test_extract_loopholes_returns_empty_on_empty_text():
 
 
 @pytest.mark.asyncio
+async def test_extract_loopholes_normalizes_finding_type():
+    """finding_type модели не доверен: fraud_scheme сохраняется, мусор и
+    отсутствие поля нормализуются к 'loophole'."""
+    from bank_audit.loophole.chat.tools_nanobot import extract_loopholes
+
+    payload = json.dumps({"loopholes": [
+        {
+            "title": "Выманивание кодов", "description": "Обман клиентов.",
+            "category": "обман клиентов", "severity": "high",
+            "evidence_quote": "переведите деньги на безопасный счёт",
+            "is_loophole": True, "finding_type": "fraud_scheme",
+        },
+        {
+            "title": "Регистр и пробелы", "description": "Обман клиентов.",
+            "category": "обман клиентов", "severity": "high",
+            "evidence_quote": "ваш счёт заблокирован",
+            "is_loophole": True, "finding_type": "Fraud scheme",
+        },
+        {
+            "title": "Обход комиссии", "description": "Уход от комиссии.",
+            "category": "комиссии", "severity": "low",
+            "evidence_quote": "вывожу без комиссии",
+            "is_loophole": True, "finding_type": "unexpected-garbage",
+        },
+        {
+            "title": "Без типа", "description": "", "category": "",
+            "severity": "medium", "evidence_quote": "ещё одна цитата",
+            "is_loophole": True,
+        },
+    ]}, ensure_ascii=False)
+
+    class FakeLLM:
+        async def ainvoke(self, _messages):
+            return SimpleNamespace(content=payload)
+
+    out = await extract_loopholes("Текст источника", llm=FakeLLM())
+
+    assert [item["finding_type"] for item in out] == [
+        "fraud_scheme", "fraud_scheme", "loophole", "loophole",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_extract_tool_queues_confirmed_finding_for_server_persistence(monkeypatch, session):
     """Инструмент извлечения передаёт явно оценённые находки серверу, не записывая БД сам."""
     from bank_audit.loophole.chat import tools_nanobot
@@ -254,6 +301,7 @@ async def test_extract_tool_queues_confirmed_finding_for_server_persistence(monk
             "category": "Комиссии",
             "severity": "high",
             "is_loophole": True,
+            "finding_type": "loophole",
         },
         {
             "title": "Не лазейка",
@@ -269,6 +317,7 @@ async def test_extract_tool_queues_confirmed_finding_for_server_persistence(monk
             "category": None,
             "severity": "low",
             "is_loophole": False,
+            "finding_type": "loophole",
         },
     ]
 

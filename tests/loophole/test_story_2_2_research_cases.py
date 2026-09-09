@@ -43,6 +43,7 @@ def _create_research_schema(session) -> None:
             description TEXT NOT NULL,
             severity TEXT NOT NULL,
             is_loophole INTEGER NOT NULL,
+            finding_type TEXT NOT NULL DEFAULT 'loophole',
             model_is_loophole INTEGER,
             model_confidence REAL,
             model_reason TEXT,
@@ -119,6 +120,7 @@ def test_research_case_service_keeps_candidate_and_source_outside_catalog(sessio
         description="Комиссия не выделена в рекламном предложении.",
         severity="medium",
         is_loophole=True,
+        finding_type="fraud_scheme",
     )
 
     candidate = service.get_candidate(candidate_id)
@@ -126,6 +128,7 @@ def test_research_case_service_keeps_candidate_and_source_outside_catalog(sessio
     assert candidate["source_url"] == "https://example.ru/terms"
     assert candidate["evidence"] == "В договоре указана комиссия."
     assert candidate["is_loophole"] is True
+    assert candidate["finding_type"] == "fraud_scheme"
     assert candidate["search_params"] == {"max_results": 12}
     assert session.execute(text("SELECT count(*) FROM loophole_record")).scalar_one() == 0
 
@@ -437,6 +440,7 @@ def test_submit_selected_case_creates_idempotent_immutable_snapshot(session):
         description="Комиссия не видна заранее.",
         severity="high",
         is_loophole=True,
+        finding_type="fraud_scheme",
     )
 
     snapshot = service.submit_for_verification(
@@ -461,6 +465,8 @@ def test_submit_selected_case_creates_idempotent_immutable_snapshot(session):
     assert snapshot["submitted_by"] == "analyst"
     assert snapshot["run_id"] == "agent-run-7"
     assert snapshot["case"]["title"] == "Скрытая комиссия"
+    # Тип находки доезжает до верификации ЦК КС внутри immutable snapshot.
+    assert snapshot["case"]["finding_type"] == "fraud_scheme"
     assert snapshot["evidence"] == [{
         "source_id": source_id,
         "revision": 1,

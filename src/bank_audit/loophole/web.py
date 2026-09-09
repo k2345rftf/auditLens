@@ -574,8 +574,11 @@ def mark_verdict(
     """Ручная маркировка: уязвимость, мошенническая схема или ни то ни другое.
 
     Покрывает одиночную (массив из одного id) и массовую маркировку.
-    is_loophole=true → пример добавляется в KB (дедуп по record_id);
-    is_loophole=false → пример удаляется из KB (откат).
+    is_loophole=true с типом vulnerability → пример добавляется в KB (дедуп
+    по record_id); мошеннические схемы (classification='fraud_scheme') в KB
+    не попадают — база знаний хранит примеры именно лазеек, иначе few-shot
+    классификатор учился бы на мошенничестве; is_loophole=false или переход
+    в fraud_scheme → пример удаляется из KB (откат).
     """
     authorization.require_mark_verdict(user_id, session=session)
     if not body.record_ids:
@@ -597,7 +600,7 @@ def mark_verdict(
             classification=body.classification,
             session=session,
         )
-        if body.is_loophole:
+        if body.is_loophole and body.classification == "vulnerability":
             if repo.get_kb_example_by_record(rid, session=session) is None:
                 description = (
                     record.get("snippet")

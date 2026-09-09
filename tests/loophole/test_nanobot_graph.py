@@ -142,6 +142,73 @@ async def test_stream_chat_saves_confirmed_findings_and_auto_imports_to_catalog(
 
 
 @pytest.mark.asyncio
+async def test_stream_chat_saves_fraud_scheme_with_fraud_classification(
+    monkeypatch, session
+):
+    """Мошенническая схема из managed run сохраняется в каталог как fraud_scheme
+    (is_loophole=TRUE, статус preliminary), а UI-карточка несёт finding_type."""
+    from sqlalchemy import text
+
+    from bank_audit.loophole.chat import graph
+    from tests.loophole.test_story_2_2_research_cases import _create_research_schema
+
+    _create_research_schema(session)
+
+    class FakeAgent:
+        def __init__(self, context):
+            self.context = context
+
+        async def stream(self, _prompt, *, hook):
+            self.context.fetched_sources["https://example.ru/fraud"] = {
+                "url": "https://example.ru/fraud",
+                "title": "Источник о мошенниках",
+                "extracted_text": "Мошенники выманивают коды у клиентов.",
+                "published_at": None,
+            }
+            self.context.pending_records.append(
+                {
+                    "title": "Выманивание кодов",
+                    "url": "https://example.ru/fraud",
+                    "snippet": "Мошенники выманивают коды у клиентов.",
+                    "bank_slug": "sberbank",
+                    "raw_text": "Мошенники выманивают коды у клиентов.",
+                    "is_loophole": True,
+                    "finding_type": "fraud_scheme",
+                }
+            )
+            hook.final_answer = "Готово"
+            if False:
+                yield None
+
+        async def aclose(self):
+            return None
+
+    class FakeFactory:
+        def create(self, context, **_kwargs):
+            return FakeAgent(context)
+
+    monkeypatch.setattr(graph, "AgentFactory", FakeFactory)
+    monkeypatch.setattr(graph, "_save_agent_audit", lambda *args, **kwargs: None)
+
+    state: ChatState = {
+        "query": "Найди мошеннические схемы",
+        "workspace_id": 1,
+        "user_id": "analyst",
+        "clarification_verified": True,
+    }
+    events = [event async for event in stream_chat(state, session=session)]
+
+    record = session.execute(
+        text("SELECT status, is_loophole, classification FROM loophole_record")
+    ).mappings().one()
+    assert record["status"] == "preliminary"
+    assert record["is_loophole"] in (True, 1)
+    assert record["classification"] == "fraud_scheme"
+    cards = [event["data"] for event in events if event["event"] == "records"]
+    assert cards and cards[0][0]["finding_type"] == "fraud_scheme"
+
+
+@pytest.mark.asyncio
 async def test_stream_partial_run_does_not_persist_on_fatal_error(monkeypatch, session):
     """Фатальный сбой (провайдер/протокол): persist запрещён, но с warning-логом
     о числе отброшенных находок и кодах ошибок."""

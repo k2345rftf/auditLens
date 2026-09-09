@@ -90,3 +90,43 @@ async def test_classify_strips_fences():
     verdict = await classify.classify_text("текст", llm=llm)
     assert verdict.is_loophole is True
     assert verdict.confidence == 0.7
+
+
+@pytest.mark.asyncio
+async def test_reclassify_preserves_fraud_scheme_classification(session):
+    """Повторная классификация не откатывает fraud_scheme к vulnerability."""
+    rid = repo.insert_record(
+        LoopholeRecord(
+            sha256=sha256_text("fraud-doc"),
+            title="звонок от имени банка",
+            raw_text="мошенники выманивают коды у клиентов",
+            is_loophole=True,
+            classification="fraud_scheme",
+        ),
+        session=session,
+    )
+    llm = _make_llm_mock({"is_loophole": True, "confidence": 0.7, "reason": "повторный вердикт"})
+    await classify.classify_record(rid, llm=llm, model="test-model", session=session)
+    row = repo.get_record(rid, session=session)
+    assert row["classification"] == "fraud_scheme"
+    assert row["is_loophole"] is True
+
+
+@pytest.mark.asyncio
+async def test_reclassify_to_negative_resets_classification(session):
+    """Отрицательный повторный вердикт пересчитывает тип в not_confirmed."""
+    rid = repo.insert_record(
+        LoopholeRecord(
+            sha256=sha256_text("fraud-doc-negative"),
+            title="звонок от имени банка",
+            raw_text="мошенники выманивают коды у клиентов",
+            is_loophole=True,
+            classification="fraud_scheme",
+        ),
+        session=session,
+    )
+    llm = _make_llm_mock({"is_loophole": False, "confidence": 0.2, "reason": "штатная практика"})
+    await classify.classify_record(rid, llm=llm, model="test-model", session=session)
+    row = repo.get_record(rid, session=session)
+    assert row["classification"] == "not_confirmed"
+    assert row["is_loophole"] is False

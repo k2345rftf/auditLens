@@ -105,12 +105,21 @@ async def classify_record(
         str(x) for x in (row.get("title"), row.get("snippet"), row.get("raw_text")) if x
     )
     verdict = await classify_text(text, llm=llm)
+    # Тип находки переживает реклассификацию: fraud_scheme не откатывается
+    # к дефолтной vulnerability, пока вердикт остаётся положительным. При
+    # отрицательном вердикте тип пересчитывается дефолтом update_verdict
+    # (not_confirmed) — инвариант is_loophole == (classification !=
+    # 'not_confirmed') сохраняется.
+    classification = row.get("classification")
+    if not verdict.is_loophole or classification not in ("vulnerability", "fraud_scheme"):
+        classification = None
     repo.update_verdict(
         record_id,
         is_loophole=verdict.is_loophole,
         confidence=verdict.confidence,
         reason=verdict.reason,
         model=model or LoopholeSettings.load().effective_classify_model(),
+        classification=classification,
         session=session,
     )
     return verdict

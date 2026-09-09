@@ -40,8 +40,9 @@ def test_classification_transition_round_trips_and_moves_between_filters(
     assert repo.list_records(session=session)[0]["classification"] == after_type
     if after_type != "not_confirmed":
         assert repo.list_published_cases(session=session)[0]["classification"] == after_type
+    # KB хранит примеры именно лазеек: fraud_scheme в базу знаний не попадает.
     assert (repo.get_kb_example_by_record(record_id, session=session) is not None) is (
-        after_type != "not_confirmed"
+        after_type == "vulnerability"
     )
     for selected in ["all", "confirmed", *TYPES]:
         result = client.get(
@@ -115,6 +116,25 @@ def test_catalog_legacy_types_and_combined_filters(client, session):
     assert client.get(
         "/api/loophole/catalog?classification=unknown", headers=access._HEADERS,
     ).status_code == 422
+
+
+def test_fraud_scheme_marking_does_not_pollute_kb(client, session):
+    """Мошенническая схема не становится примером лазейки в KB: ручная
+    маркировка fraud_scheme не добавляет пример, а переход vulnerability →
+    fraud_scheme удаляет ранее добавленный."""
+    access._access(session, role="ccks_expert")
+    record_ids = access._records(session, 1)
+    assert repo.get_kb_example_by_record(record_ids[0], session=session) is not None
+
+    response = client.post(access._ENDPOINT, headers=access._HEADERS, json={
+        "record_ids": record_ids, "classification": "fraud_scheme",
+    })
+
+    assert response.status_code == 200
+    record = repo.get_record(record_ids[0], session=session)
+    assert record["classification"] == "fraud_scheme"
+    assert record["is_loophole"] is True
+    assert repo.get_kb_example_by_record(record_ids[0], session=session) is None
 
 
 def test_bulk_classification_keeps_one_result_per_record(client, session):

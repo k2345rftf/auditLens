@@ -291,3 +291,149 @@ def test_auto_import_survives_broken_source_date(session):
     assert len(rows) == 1
     assert rows[0]["status"] == "preliminary"
     assert rows[0]["published_at"] is None
+
+
+def test_fraud_scheme_finding_imported_with_fraud_classification(session):
+    """Мошенническая схема (finding_type='fraud_scheme') попадает в каталог
+    как fraud_scheme с is_loophole=TRUE по конвенции миграции 066."""
+    _create_import_schema(session)
+    sources = [{
+        "url": "https://bank.example/fraud",
+        "title": "Отзыв о звонках",
+        "extracted_text": "Мошенники звонят от имени банка и выманивают коды.",
+    }]
+    findings = [{
+        "url": "https://bank.example/fraud",
+        "title": "Звонки от имени банка",
+        "snippet": "Мошенники звонят от имени банка и выманивают коды.",
+        "category": "обман клиентов",
+        "description": "Выманивание кодов у клиентов под видом сотрудников банка.",
+        "severity": "high",
+        "is_loophole": True,
+        "finding_type": "fraud_scheme",
+    }]
+
+    public = _persist_confirmed_findings(
+        findings, sources=sources, workspace_id=1, user_id="analyst",
+        run_id="run-fraud-import", query="проверь мошенничество", session=session,
+    )
+
+    assert len(public) == 1
+    assert public[0]["finding_type"] == "fraud_scheme"
+    rows = repo.list_catalog_cases(session=session)
+    assert len(rows) == 1
+    assert rows[0]["classification"] == "fraud_scheme"
+    assert rows[0]["is_loophole"] is True
+    assert rows[0]["status"] == "preliminary"
+
+
+def test_fraud_takes_priority_when_source_has_findings_of_both_types(session):
+    """У источника с кандидатами обоих типов запись каталога — fraud_scheme."""
+    _create_import_schema(session)
+    sources = [{
+        "url": "https://bank.example/mixed",
+        "title": "Смешанный источник",
+        "extracted_text": "Комиссия скрыта в примечании. Мошенники выманивают коды.",
+    }]
+    findings = [
+        {
+            "url": "https://bank.example/mixed",
+            "title": "Скрытая комиссия",
+            "snippet": "Комиссия скрыта в примечании.",
+            "description": "Комиссия не вынесена в основное предложение.",
+            "severity": "medium",
+            "is_loophole": True,
+            "finding_type": "loophole",
+        },
+        {
+            "url": "https://bank.example/mixed",
+            "title": "Выманивание кодов",
+            "snippet": "Мошенники выманивают коды.",
+            "description": "Обман клиентов под видом сотрудников банка.",
+            "severity": "high",
+            "is_loophole": True,
+            "finding_type": "fraud_scheme",
+        },
+    ]
+
+    _persist_confirmed_findings(
+        findings, sources=sources, workspace_id=1, user_id="analyst",
+        run_id="run-mixed-import", query="проверь схемы", session=session,
+    )
+
+    rows = repo.list_catalog_cases(session=session)
+    assert len(rows) == 1
+    assert rows[0]["classification"] == "fraud_scheme"
+    assert rows[0]["is_loophole"] is True
+
+
+def test_unknown_finding_type_normalized_to_loophole_on_persist(session):
+    """Мусорный finding_type не роняет CHECK миграции 067 и трактуется как лазейка."""
+    _create_import_schema(session)
+    findings, sources = _payload()
+    findings[0]["finding_type"] = "unexpected-garbage"
+
+    public = _persist_confirmed_findings(
+        findings, sources=sources, workspace_id=1, user_id="analyst",
+        run_id="run-junk-type", query="проверь комиссии", session=session,
+    )
+
+    assert len(public) == 1
+    rows = repo.list_catalog_cases(session=session)
+    assert [row["classification"] for row in rows] == ["vulnerability"]
+    candidate_type = session.execute(
+        text("SELECT finding_type FROM loophole_research_candidate")
+    ).scalar_one()
+    assert candidate_type == "loophole"
+
+
+def test_fraud_typed_finding_with_negative_verdict_becomes_not_confirmed(session):
+    """finding_type='fraud_scheme' при is_loophole=False осознанно уходит
+    в not_confirmed: знак вердикта важнее типа (инвариант update_verdict)."""
+    _create_import_schema(session)
+    sources = [{
+        "url": "https://bank.example/fraud-negative",
+        "title": "Проверенный отзыв",
+        "extracted_text": "Комиссия не взимается.",
+    }]
+    findings = [{
+        "url": "https://bank.example/fraud-negative",
+        "title": "Штатная комиссия",
+        "snippet": "Комиссия не взимается.",
+        "description": "Подозрение на мошенничество не подтвердилось.",
+        "severity": "low",
+        "is_loophole": False,
+        "finding_type": "fraud_scheme",
+    }]
+
+    public = _persist_confirmed_findings(
+        findings, sources=sources, workspace_id=1, user_id="analyst",
+        run_id="run-fraud-negative", query="проверь мошенничество", session=session,
+    )
+
+    assert public == []
+    rows = repo.list_catalog_cases(session=session)
+    assert len(rows) == 1
+    assert rows[0]["classification"] == "not_confirmed"
+    assert rows[0]["is_loophole"] is False
+
+
+def test_candidate_report_marks_fraud_scheme_type():
+    """Текстовый отчёт помечает мошеннические схемы, не смешивая их с лазейками."""
+    from bank_audit.loophole.agent import candidate_report
+
+    report = candidate_report([
+        {
+            "title": "Обход комиссии", "url": "https://bank.example/a",
+            "evidence_quote": "вывожу без комиссии", "description": "Механизм.",
+            "published_at": None, "finding_type": "loophole",
+        },
+        {
+            "title": "Выманивание кодов", "url": "https://bank.example/b",
+            "evidence_quote": "переведите деньги", "description": "Механизм.",
+            "published_at": None, "finding_type": "fraud_scheme",
+        },
+    ])
+
+    # Пометка типа стоит только у мошеннической схемы — ровно один раз.
+    assert report.count("Тип: мошенническая схема") == 1
