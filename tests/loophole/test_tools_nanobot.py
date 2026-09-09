@@ -61,6 +61,15 @@ def test_nanobot_prompt_forbids_widening_a_hard_publication_period():
     assert "службы внутреннего аудита Сбербанка" not in prompt
 
 
+def test_nanobot_prompt_requires_web_search_before_not_found():
+    prompt = load_prompt("07_nanobot_system")
+
+    assert "веб-поиск обязателен" in prompt
+    assert "минимум по двум" in prompt
+    assert "независимым кластерам запросов" in prompt
+    assert "без выполненного веб-поиска считается ошибкой работы" in prompt
+
+
 def test_nanobot_prompt_requires_wide_separate_fraud_research():
     from bank_audit.loophole.chat.nanobot_agent import load_system_prompt
 

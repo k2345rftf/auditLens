@@ -104,6 +104,8 @@ class ToolContext:
     budget: ResearchBudget | None = None
     subagents: ResearchSubagents | None = None
     source_estimated_dates: dict[str, str | None] = field(default_factory=dict)
+    # True только у отдельного ToolContext серверного веб-fallback (см. _ensure_tool_active).
+    fallback_active: bool = False
 
 
 def _ensure_tool_active(context: ToolContext | None) -> None:
@@ -111,8 +113,20 @@ def _ensure_tool_active(context: ToolContext | None) -> None:
     task = asyncio.current_task()
     if task is not None and task.cancelling():
         raise asyncio.CancelledError
-    if context is not None and context.budget is not None:
-        context.budget.ensure_active()
+    if context is None or context.budget is None:
+        return
+    if context.fallback_active:
+        # Scoped-доступ серверного веб-fallback: флаг выставлен только на его
+        # собственном ToolContext, поэтому глобальный budget.cancelled (выставлен
+        # при завершении запуска) не блокирует его вызовы, а поздние записи
+        # фоновых subagent (их контексты флага не имеют) по-прежнему отсекаются.
+        # Дедлайн бюджета и остановка по requested_count действуют и для fallback.
+        if context.budget.stop_reason == "requested_count":
+            raise asyncio.CancelledError
+        if context.budget.expired:
+            raise TimeoutError("Исчерпан общий бюджет исследования")
+        return
+    context.budget.ensure_active()
 
 
 async def _call_with_transient_retries(

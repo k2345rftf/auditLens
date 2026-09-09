@@ -38,9 +38,44 @@ PARTIAL_STOP_MESSAGES = {
         "Поиск остановлен: несколько раундов не дали новых прочитанных источников или кандидатов."
     ),
 }
+NO_FINDINGS_BUDGET_MESSAGE = (
+    "До остановки не получено AI-кандидатов, прошедших проверку "
+    "источника и условий запроса."
+)
 _PROGRESS_INTERVAL_SECONDS = 5.0
 _CLEANUP_TIMEOUT_SECONDS = 2.0
+# Минимальный остаток бюджета для серверного веб-fallback: два поиска (~2 сетевых
+# вызова до 45 с каждый в худшем случае) + чтение страниц + извлечение должны
+# успеть завершиться. Состав: поиски/чтения с per-call потолком 45 с и извлечение
+# с тем же потолком на источник, поэтому порог входа (60) > потолка вызова (45).
+_WEB_FALLBACK_MIN_BUDGET_SECONDS = 60.0
+# Per-call потолок одного сетевого вызова fallback (как у извлечения между раундами).
+_WEB_FALLBACK_CALL_TIMEOUT_SECONDS = 45.0
+# Ниже этого остатка извлечение не стартует: LLM-вызов всё равно не успеет —
+# не «долбим» источники мгновенными таймаутами.
+_EXTRACTION_MIN_BUDGET_SECONDS = 10.0
+_WEB_FALLBACK_MAX_FETCHES = 4
+_WEB_FALLBACK_MAX_EXTRACTIONS = 4
+# Базовый запрос кластеров обрезается, чтобы в SearXNG не уходили мусорные
+# длинные строки (и плейсхолдеры ПДн-маскировки вида [TYPE_N]).
+_WEB_FALLBACK_QUERY_BASE_CHARS = 80
+_MASK_PLACEHOLDER = re.compile(r"\[[A-Z][A-Z0-9]*_\d+\]")
 log = structlog.get_logger(__name__)
+
+
+def _web_fallback_clusters(query: str) -> list[str]:
+    """Детерминированные независимые кластеры веб-поиска из запроса пользователя."""
+    base = _MASK_PLACEHOLDER.sub(" ", str(query or ""))
+    base = " ".join(base.split())[:_WEB_FALLBACK_QUERY_BASE_CHARS].strip()
+    if not base:
+        return []
+    clusters = (
+        f"{base} лазейка схема обход условий банка",
+        f"{base} обход комиссии лайфхак форум",
+        f"{base} мошенническая схема уязвимость",
+        base,
+    )
+    return list(dict.fromkeys(clusters))
 
 
 async def _await_cleanup(task: asyncio.Task, *, deadline: float) -> None:
@@ -150,7 +185,7 @@ def eligible_findings(context: AgentRunContext) -> list[dict]:
     return selected
 
 
-def _candidate_report(records: list[dict]) -> str:
+def candidate_report(records: list[dict]) -> str:
     """Формирует отчёт без нового обращения к LLM и без статуса экспертного подтверждения."""
     if not records:
         return ""
@@ -248,6 +283,7 @@ class ManagedAgent:
         self._progress_signature: tuple = (frozenset(), 0, frozenset())
         self._stalled_rounds = 0
         self._activity_events: asyncio.Queue = asyncio.Queue()
+        self._web_fallback_attempted = False
         self._bind_model_deadlines()
 
     def _bind_model_deadlines(self) -> None:
@@ -312,10 +348,46 @@ class ManagedAgent:
         else:
             messages.insert(0, {"role": "system", "content": content})
 
-    async def _complete_iteration(self) -> None:
-        """Проверяет прочитанные страницы до следующего планирования моделью."""
+    def _emit_tool_activity(self, name: str, status: str) -> None:
+        """Публикует безопасное событие активности инструмента для SSE-прогресса."""
+        self._activity_events.put_nowait(SimpleNamespace(type="audit.tool", metadata={
+            "name": name, "status": status,
+        }))
+
+    async def _extract_pending_sources(self, ctx: Any, pending: list[dict]) -> None:
+        """Прогоняет извлечение по прочитанным страницам с ПДн-маскированием.
+
+        Общая механика серверного извлечения: используется между раундами
+        агента (``_complete_iteration``) и серверным веб-fallback.
+        """
         from ..chat.tools_nanobot import AuditExtractLoopholesTool
 
+        # Не добавляем новый клиент: используем существующее извлечение с ПДн-маскированием.
+        for source in pending:
+            if self._budget.research_seconds() <= _EXTRACTION_MIN_BUDGET_SECONDS:
+                # В остатке бюджета LLM-вызов всё равно не успеет: не «долбим»
+                # источники мгновенными таймаутами.
+                break
+            self._check_limits()
+            url = source["url"]
+            self._emit_tool_activity("audit_extract_loopholes", "running")
+            try:
+                async with asyncio.timeout(min(45.0, self._budget.research_seconds())):
+                    await AuditExtractLoopholesTool(ctx).execute(
+                        text=source["extracted_text"], source_url=url,
+                    )
+            except TimeoutError:
+                self._budget.analysis_status[url] = "extraction_timeout"
+            except Exception:  # noqa: BLE001 — сохраняем только безопасный код
+                self._budget.analysis_status[url] = "extraction_failed"
+            self._emit_tool_activity(
+                "audit_extract_loopholes",
+                "completed" if self._budget.analysis_status.get(url) == "completed" else "failed",
+            )
+            self._check_limits()
+
+    async def _complete_iteration(self) -> None:
+        """Проверяет прочитанные страницы до следующего планирования моделью."""
         ctx = ToolContext(
             self.context.user_id, self.context.workspace_id, None, query=self.context.query,
             budget=self._budget, pending_records=self.context.pending_records,
@@ -331,28 +403,7 @@ class ManagedAgent:
                    and not _source_publication_period_error(ctx, url)]
         if pending:
             self._set_phase("research_tools")
-        # Не добавляем новый клиент: используем существующее извлечение с ПДн-маскированием.
-        for source in pending[:2]:
-            self._check_limits()
-            url = source["url"]
-            self._activity_events.put_nowait(SimpleNamespace(type="audit.tool", metadata={
-                "name": "audit_extract_loopholes", "status": "running",
-            }))
-            try:
-                async with asyncio.timeout(min(45.0, self._budget.research_seconds())):
-                    await AuditExtractLoopholesTool(ctx).execute(
-                        text=source["extracted_text"], source_url=url,
-                    )
-            except TimeoutError:
-                self._budget.analysis_status[url] = "extraction_timeout"
-            except Exception:  # noqa: BLE001 — сохраняем только безопасный код
-                self._budget.analysis_status[url] = "extraction_failed"
-            self._activity_events.put_nowait(SimpleNamespace(type="audit.tool", metadata={
-                "name": "audit_extract_loopholes",
-                "status": ("completed" if self._budget.analysis_status.get(url) == "completed"
-                           else "failed"),
-            }))
-            self._check_limits()
+        await self._extract_pending_sources(ctx, pending[:2])
         signature = (frozenset(unique), len(eligible_findings(self.context)),
                      frozenset(self._budget.analysis_status))
         self._stalled_rounds = self._stalled_rounds + 1 if signature == self._progress_signature else 0
@@ -360,6 +411,147 @@ class ManagedAgent:
         if self._stalled_rounds >= self._budget.no_progress_limit:
             self._budget.stop_reason = "no_progress"
             raise _ResearchStopped
+
+    def web_fallback_needed(self) -> bool:
+        """Условия запуска веб-fallback из I/O-матрицы спеки (без побочных эффектов)."""
+        budget = self._budget
+        if self._web_fallback_attempted:
+            return False
+        if eligible_findings(self.context):
+            return False
+        if budget.search_results or budget.search_cache:
+            return False
+        return budget.research_seconds() >= _WEB_FALLBACK_MIN_BUDGET_SECONDS
+
+    async def run_web_fallback(self) -> bool:
+        """Серверный веб-fallback при пустом результате без веб-поиска.
+
+        Вызывается только для неотменённого запуска: при отмене пользователем
+        SSE-генератор уже закрыт и до вызова управление не доходит. Возвращает
+        True, если fallback был запущен (независимо от числа найденных
+        кандидатов). Сетевые сбои конвертируются в безопасные коды и наружу не
+        пробрасываются. ``budget.cancelled`` не снимается: доступ к tools
+        fallback получает через scoped-флаг ``fallback_active`` своего
+        ToolContext (поздние записи фоновых subagent по-прежнему отсекаются).
+        ``budget.stop_reason`` после fallback восстанавливается, чтобы
+        SSE/AgentResult/аудит не расходились с терминальным состоянием запуска.
+        """
+        if not self.web_fallback_needed():
+            return False
+        self._web_fallback_attempted = True
+        budget = self._budget
+        previous_stop = budget.stop_reason
+        budget.stop_reason = None
+        try:
+            await self._web_fallback_research()
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise
+            # Внутренняя остановка по бюджету (включая _ResearchStopped) — не ошибка.
+        except Exception:  # fallback не должен ронять чат
+            log.warning(
+                "loophole_web_fallback_failed", run_id=self.context.run_id, exc_info=True,
+            )
+        finally:
+            # Всегда восстанавливаем прежний stop_reason: fallback — эпилог
+            # запуска и не должен перезаписывать его терминальное состояние.
+            budget.stop_reason = previous_stop
+        return True
+
+    async def _web_fallback_research(self) -> None:
+        """Поиск по независимым кластерам → чтение топ-страниц → извлечение."""
+        from ..chat.tools_nanobot import AuditWebFetchTool, AuditWebSearchTool
+
+        budget = self._budget
+        ctx = ToolContext(
+            self.context.user_id, self.context.workspace_id, None, query=self.context.query,
+            budget=budget, pending_records=self.context.pending_records,
+            fetched_sources=self.context.fetched_sources,
+            source_publication_dates={url: source.get("published_at")
+                                      for url, source in self.context.fetched_sources.items()},
+            source_estimated_dates={url: source.get("estimated_published_at")
+                                    for url, source in self.context.fetched_sources.items()},
+            fallback_active=True,
+        )
+        # Веб-поиск минимум по двум независимым кластерам запроса; остальные —
+        # при щедром остатке бюджета. Лимиты и кеш — внутри tool-классов.
+        # В квоту «≥2 кластера» засчитываются только успешные поиски.
+        searched_ok = 0
+        for cluster in _web_fallback_clusters(self.context.query):
+            if searched_ok >= 2 and budget.research_seconds() < _WEB_FALLBACK_MIN_BUDGET_SECONDS:
+                break
+            if len(budget.search_cache) >= budget.search_limit:
+                break  # лимит поиска: дальше кластеры бесполезны, события не эмитим
+            key = " ".join(cluster.casefold().split())
+            self._emit_tool_activity("audit_web_search", "running")
+            try:
+                async with asyncio.timeout(
+                    min(_WEB_FALLBACK_CALL_TIMEOUT_SECONDS, budget.research_seconds())
+                ):
+                    await AuditWebSearchTool(ctx).execute(cluster, max_results=8)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise
+                break
+            except TimeoutError:
+                # Один медленный поиск не должен съедать остаток бюджета:
+                # переходим к следующему кластеру, пока бюджет позволяет.
+                self._emit_tool_activity("audit_web_search", "failed")
+                continue
+            except Exception:  # noqa: BLE001 — сбой поиска не роняет чат
+                self._emit_tool_activity("audit_web_search", "failed")
+                continue
+            cached = budget.search_cache.get(key)
+            if isinstance(cached, list):
+                self._emit_tool_activity("audit_web_search", "completed")
+                searched_ok += 1
+            else:
+                self._emit_tool_activity("audit_web_search", "failed")
+        # Чтение топ-страниц выдачи в остатке бюджета и с запасом на извлечение.
+        fetched = 0
+        for source in list(budget.search_results):
+            if fetched >= _WEB_FALLBACK_MAX_FETCHES:
+                break
+            if budget.research_seconds() <= _WEB_FALLBACK_CALL_TIMEOUT_SECONDS:
+                break
+            url = str(source.get("url") or "")
+            if not url or url in budget.fetch_cache:
+                continue
+            if len(budget.fetch_cache) >= budget.fetch_limit:
+                break  # лимит чтения: выходим без серии вводящих failed-событий
+            self._emit_tool_activity("audit_web_fetch", "running")
+            try:
+                async with asyncio.timeout(
+                    min(_WEB_FALLBACK_CALL_TIMEOUT_SECONDS, budget.research_seconds())
+                ):
+                    await AuditWebFetchTool(ctx).execute(url)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise
+                break
+            except TimeoutError:
+                self._emit_tool_activity("audit_web_fetch", "failed")
+                continue
+            except Exception:  # noqa: BLE001 — сбой fetch не роняет чат
+                self._emit_tool_activity("audit_web_fetch", "failed")
+                continue
+            cached = budget.fetch_cache.get(url)
+            failed = not (isinstance(cached, dict) and cached.get("excerpt"))
+            self._emit_tool_activity("audit_web_fetch", "failed" if failed else "completed")
+            if not failed:
+                fetched += 1
+        # Извлечение — та же механика, что и между раундами агента.
+        unique = {source.get("url"): source for source in self.context.fetched_sources.values()}
+        pending = [source for url, source in unique.items()
+                   if url and url not in budget.analysis_status
+                   and not _source_publication_period_error(ctx, url)]
+        try:
+            await self._extract_pending_sources(ctx, pending[:_WEB_FALLBACK_MAX_EXTRACTIONS])
+        except _ResearchStopped:
+            pass
 
     def _materials_report(self) -> str:
         """Сохраняет безопасный реестр материалов; не выдаёт выдачу за доказательства."""
@@ -437,14 +629,11 @@ class ManagedAgent:
         if count:
             records = records[:count]
         self.context.pending_records[:] = records
-        report = _candidate_report(records)
+        report = candidate_report(records)
         if self._budget.stop_reason == "requested_count":
             hook.final_answer = report
         else:
-            hook.final_answer = report or (
-                "До остановки не получено AI-кандидатов, прошедших проверку "
-                "источника и условий запроса."
-            )
+            hook.final_answer = report or NO_FINDINGS_BUDGET_MESSAGE
             materials = self._materials_report()
             if materials:
                 hook.final_answer += "\n\n" + materials
@@ -789,11 +978,13 @@ __all__ = [
     "AGENT_TIME_BUDGET_MESSAGE",
     "AGENT_UNAVAILABLE_MESSAGE",
     "DEFAULT_ALLOWED_SKILLS",
+    "NO_FINDINGS_BUDGET_MESSAGE",
     "AgentFactory",
     "AgentResult",
     "AgentRunContext",
     "ManagedAgent",
     "SkillRegistry",
     "UnknownSkillError",
+    "candidate_report",
     "create_nanobot",
 ]

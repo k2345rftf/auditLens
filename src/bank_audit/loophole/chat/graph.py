@@ -16,17 +16,20 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
+import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from .. import logging_audit
 from .. import repository as repo
 from ..agent import (
     AGENT_UNAVAILABLE_MESSAGE,
+    NO_FINDINGS_BUDGET_MESSAGE,
     PARTIAL_STOP_MESSAGES,
     AgentFactory,
     AgentResult,
     AgentRunContext,
     _safe_run_id,
+    candidate_report,
     eligible_findings,
 )
 from ..research_cases import ResearchCaseService
@@ -36,6 +39,21 @@ from .nanobot_agent import build_prompt
 from .state import ChatState
 
 log = logging.getLogger(__name__)
+slog = structlog.get_logger(__name__)
+
+# Нефатальные завершения запуска, при которых persist находок разрешён через
+# строгую самопроверяемую валидацию ``eligible_findings``: бюджетные остановки,
+# флаки одного tool-вызова (skill_failed) и лимит итераций. Фатальные ошибки
+# (agent_error, agent_stream_error, сбой протокола/провайдера) persist запрещают.
+_PERSISTABLE_PARTIAL_ERRORS = frozenset(
+    (*PARTIAL_STOP_MESSAGES, "skill_failed", "max_iterations", "cleanup_timeout")
+)
+# Инструменты, чьи audit.tool-события публикуются в SSE (серверное извлечение
+# между раундами и серверный веб-fallback).
+_AUDIT_ACTIVITY_TOOLS = frozenset({
+    "audit_extract_loopholes", "audit_web_search", "audit_web_fetch",
+})
+_FALLBACK_PROGRESS_POLL_SECONDS = 0.5
 
 
 class AgentAuditError(RuntimeError):
@@ -204,6 +222,32 @@ def _persist_confirmed_findings(
         for finding in findings
         if finding.get("is_loophole") and str(finding.get("url") or "") in candidate_urls
     ]
+
+
+async def _stream_web_fallback(agent: Any, hook: AuditHook) -> AsyncIterator[dict]:
+    """Прогоняет серверный веб-fallback, стримя его прогресс из очереди активности.
+
+    Отмена SSE-генератора отменяет и задачу fallback; сетевые сбои внутри
+    fallback конвертируются в безопасные коды и сюда не пробрасываются.
+    """
+    run_fallback = getattr(agent, "run_web_fallback", None)
+    activity = getattr(agent, "_activity_events", None)
+    if not callable(run_fallback) or activity is None:
+        return
+    task = asyncio.ensure_future(run_fallback())
+    try:
+        while True:
+            done, _ = await asyncio.wait((task,), timeout=_FALLBACK_PROGRESS_POLL_SECONDS)
+            while not activity.empty():
+                mapped = _map_event(activity.get_nowait(), hook)
+                if mapped:
+                    yield mapped
+            if done:
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def run_chat(
@@ -490,11 +534,54 @@ async def stream_chat(
         if stream_failed and "agent_stream_error" not in errors:
             errors.append("agent_stream_error")
         records = []
-        budget_expired_only = bool(errors) and set(errors) <= set(PARTIAL_STOP_MESSAGES)
-        if not errors or budget_expired_only:
-            findings = (
-                eligible_findings(context) if budget_expired_only else context.pending_records
-            )
+        persistable_partial = bool(errors) and set(errors) <= _PERSISTABLE_PARTIAL_ERRORS
+        fatal_failure = protocol_failed or (bool(errors) and not persistable_partial)
+        # Серверный веб-fallback: ни одной валидной находки и нет фатальной
+        # ошибки — до persist сервер сам выполняет веб-поиск, если агент его
+        # не делал (детерминированный код вместо надежды на инструкцию промпта).
+        fallback_needed = (
+            not fatal_failure
+            and not eligible_findings(context)
+            and callable(getattr(agent, "web_fallback_needed", None))
+            and agent.web_fallback_needed()
+        )
+        fallback_report_sse = ""
+        if fallback_needed:
+            # UX-индикатор: сообщаем UI, что после основного прохода сервер
+            # довыполняет веб-поиск, чтобы «ожившие» инструменты не выглядели
+            # зависшими после финального ответа без контекста.
+            yield {"event": "phase", "data": {
+                "phase": "execute", "stage": "web_fallback",
+                "message": "По данным базы находок нет — проверяем интернет",
+            }}
+            fallback_stream = _stream_web_fallback(agent, hook)
+            try:
+                async for mapped in fallback_stream:
+                    yield mapped
+            finally:
+                # Явное закрытие: async for сам не закрывает вложенный генератор,
+                # а его finally отменяет задачу fallback при отключении клиента.
+                await fallback_stream.aclose()
+            fallback_findings = eligible_findings(context)
+            report = candidate_report(fallback_findings) if fallback_findings else ""
+            if report:
+                if NO_FINDINGS_BUDGET_MESSAGE in answer:
+                    # Заменяем ВЕСЬ устаревший блок (маркер + materials-отчёт,
+                    # утверждающий «извлечение не завершено») отчётом о находках.
+                    head = answer[:answer.index(NO_FINDINGS_BUDGET_MESSAGE)].rstrip()
+                    answer = (head + chr(10) * 2 + report) if head else report
+                else:
+                    # Агент сформулировал «не найдено» иначе: дополняем ответ
+                    # отчётом через пустую строку, чтобы не было противоречия
+                    # с сохранёнными записями.
+                    answer = answer + chr(10) * 2 + report if answer else report
+                hook.final_answer = answer
+                if streamed_any:
+                    # Ответ уже отстримлен клиенту: отчёт дошлём отдельным
+                    # token-событием в финальной секции.
+                    fallback_report_sse = report
+        if (not errors and not protocol_failed) or persistable_partial:
+            findings = eligible_findings(context) if errors else context.pending_records
             finding_urls = {str(finding.get("url")) for finding in findings}
             records = _persist_confirmed_findings(
                 findings,
@@ -502,7 +589,7 @@ async def stream_chat(
                     str(source.get("url")): source
                     for source in context.fetched_sources.values()
                     if isinstance(source, dict) and source.get("url")
-                    and (not budget_expired_only or str(source.get("url")) in finding_urls)
+                    and (not persistable_partial or str(source.get("url")) in finding_urls)
                 }.values()),
                 workspace_id=workspace_id,
                 user_id=state.get("user_id"),
@@ -510,7 +597,17 @@ async def stream_chat(
                 query=state["query"],
                 session=session,
             )
-        if not records and not errors:
+        elif context.pending_records:
+            # Фатальный сбой: persist запрещён, но не молчалив — фиксируем,
+            # сколько подтверждённых находок отброшено и с какими кодами ошибок.
+            slog.warning(
+                "loophole_persist_skipped_fatal",
+                run_id=run_id,
+                pending_count=len(context.pending_records),
+                eligible_count=len(eligible_findings(context)),
+                errors=list(errors),
+            )
+        if not records and not errors and not protocol_failed:
             records = hook.records
         terminal_provider_error = protocol_failed or (
             provider_failed and not streamed_any and not records
@@ -587,8 +684,13 @@ async def stream_chat(
         # пузырь при смене фазы) — это и был «(пустой ответ)».
         if answer and not streamed_any:
             yield {"event": "token", "data": answer}
-        elif streamed_any and partial_explanation:
-            yield {"event": "partial", "data": {"message": partial_explanation}}
+        elif streamed_any:
+            # Ответ уже отстримлен: находки веб-fallback доставляем отдельным
+            # token-событием, чтобы UI не остался с текстом «не найдено».
+            if fallback_report_sse:
+                yield {"event": "token", "data": fallback_report_sse}
+            if partial_explanation:
+                yield {"event": "partial", "data": {"message": partial_explanation}}
 
         # Сохраняем ответ.
         if workspace_id and answer and state.get("persist_messages", True):
@@ -657,7 +759,7 @@ def _map_event(event: Any, hook: Any) -> dict | None:
     ev_type = getattr(event, "type", None)
     if ev_type == "audit.tool":
         data = getattr(event, "metadata", {})
-        if (data.get("name") != "audit_extract_loopholes"
+        if (data.get("name") not in _AUDIT_ACTIVITY_TOOLS
                 or data.get("status") not in {"running", "completed", "failed"}):
             return None
         # Сбой одного источника уже учтён в реестре и не отменяет валидные находки.
