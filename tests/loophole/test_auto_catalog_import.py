@@ -291,3 +291,108 @@ def test_auto_import_survives_broken_source_date(session):
     assert len(rows) == 1
     assert rows[0]["status"] == "preliminary"
     assert rows[0]["published_at"] is None
+
+
+def test_fraud_and_loophole_findings_all_reach_catalog(session):
+    """Все находки агента (лазейка, схема, «не лазейка») попадают в loophole_record."""
+    from bank_audit.loophole.agent import AgentRunContext, eligible_findings
+    from bank_audit.loophole.chat.tools_nanobot import ToolContext
+    from bank_audit.loophole.chat.graph import _persist_confirmed_findings
+
+    _create_import_schema(session)
+    loophole_url = "https://bank.example/loophole"
+    fraud_url = "https://bank.example/fraud"
+    tool_context = ToolContext(
+        user_id="analyst",
+        workspace_id=1,
+        session=session,
+        fetched_sources={
+            loophole_url: {
+                "url": loophole_url, "title": "Лазейка",
+                "extracted_text": "Механизм обхода комиссии описан.",
+                "published_at": None,
+            },
+            fraud_url: {
+                "url": fraud_url, "title": "Схема",
+                "extracted_text": "Описание мошеннической схемы вывода средств.",
+                "published_at": None,
+            },
+        },
+    )
+    findings_input = [
+        {
+            "title": "Обход комиссии", "url": loophole_url,
+            "evidence_quote": "Механизм обхода комиссии описан.",
+            "is_loophole": True, "classification": "vulnerability",
+        },
+        {
+            "title": "Схема вывода", "url": fraud_url,
+            "evidence_quote": "Описание мошеннической схемы вывода средств.",
+            "is_loophole": True, "classification": "fraud_scheme",
+        },
+    ]
+    run_context = AgentRunContext(
+        "analyst", 1, "Найди 1 мошенническую схему", "run-all-findings",
+        pending_records=findings_input,
+        fetched_sources=tool_context.fetched_sources,
+    )
+    # Persistence-контур сохраняет все типы, независимо от запрошенного типа.
+    findings = eligible_findings(run_context, kind=None)
+    assert len(findings) == 2
+
+    _persist_confirmed_findings(
+        findings,
+        sources=list(tool_context.fetched_sources.values()),
+        workspace_id=1, user_id="analyst",
+        run_id="run-all-findings", query="Найди 1 мошенническую схему", session=session,
+    )
+    rows = repo.list_catalog_cases(session=session)
+    assert len(rows) == 2
+    by_classification = {row["classification"]: row for row in rows}
+    assert by_classification["vulnerability"]["status"] == "preliminary"
+    assert by_classification["fraud_scheme"]["status"] == "preliminary"
+    assert by_classification["fraud_scheme"]["is_loophole"] is True
+    assert repo.list_catalog_cases(classification="fraud_scheme", session=session)
+
+
+def test_triaged_subagent_items_reach_catalog_as_preliminary_leads(session):
+    """Разметка сниппетов subagents попадает в каталог с пометкой subagent_triage."""
+    _create_import_schema(session)
+    service = ResearchCaseService(session)
+    persisted = service.persist_managed_run(
+        workspace_id=1,
+        run_id="run-triaged",
+        query="проверь схемы",
+        findings=[],
+        sources=[],
+        triaged_items=[
+            {
+                "url": "https://example.ru/fraud-post", "title": "Схема вывода",
+                "snippet": "Описание мошеннической схемы вывода средств",
+                "category": "fraud", "content_type": "post", "reason": "Признаки обмана",
+            },
+            {
+                "url": "https://example.ru/ad", "title": "Реклама",
+                "snippet": "Обычная реклама карты", "category": "irrelevant",
+                "content_type": "article", "reason": "Штатная реклама",
+            },
+        ],
+    )
+    imported = service.import_preliminary_sources(
+        persisted["research_id"], imported_by="analyst",
+    )
+    assert imported["imported"] == 1
+    rows = repo.list_catalog_cases(session=session)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["url"] == "https://example.ru/fraud-post"
+    assert row["classification"] == "fraud_scheme"
+    assert row["status"] == "preliminary"
+    assert row["is_loophole"] is True
+    assert row["verdict_model"] == "subagent_triage"
+    assert row["content_status"] == "legacy"
+    # Повторный импорт идемпотентен.
+    again = service.import_preliminary_sources(
+        persisted["research_id"], imported_by="analyst",
+    )
+    assert again["imported"] == 0

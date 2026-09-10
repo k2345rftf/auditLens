@@ -95,12 +95,17 @@ class ResearchCaseService:
         title: str | None,
         extracted_text: str | None,
         published_at: str | date | datetime | None = None,
+        status: str = "fetched",
+        limitation_message: str | None = None,
     ) -> int:
+        """Фиксирует источник: 'fetched' — прочитанная страница, 'triaged' —
+        сниппет поисковой выдачи, размеченный подзадачей без чтения страницы."""
         return self._session.execute(
             text(
                 "INSERT INTO loophole_research_source "
                 "(research_id, url, title, extracted_text, published_at, status, limitation_message) "
-                "VALUES (:research_id, :url, :title, :extracted_text, :published_at, 'fetched', NULL) "
+                "VALUES (:research_id, :url, :title, :extracted_text, :published_at, :status, "
+                ":limitation_message) "
                 "RETURNING source_id"
             ),
             {
@@ -109,6 +114,8 @@ class ResearchCaseService:
                 "title": title,
                 "extracted_text": extracted_text,
                 "published_at": _normalize_published_at(published_at),
+                "status": status,
+                "limitation_message": limitation_message,
             },
         ).scalar_one()
 
@@ -120,12 +127,15 @@ class ResearchCaseService:
         query: str,
         findings: list[dict[str, Any]],
         sources: list[dict[str, Any]] | None = None,
+        triaged_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Фиксирует server-side результат managed run в изолированном исследовании.
 
         ``findings`` формируются только read-only tools после успешного fetch.
-        Метод намеренно не вызывает repository.insert_record: перенос в общий
-        каталог выполняется отдельно через ``import_preliminary_sources``
+        ``triaged_items`` — разметка сниппетов от младших исследователей
+        (loophole/fraud): сохраняется как предварительные зацепки со статусом
+        'triaged'. Метод намеренно не вызывает repository.insert_record: перенос
+        в общий каталог выполняется отдельно через ``import_preliminary_sources``
         (автоматически после анализа из chat/graph.py и по явному endpoint'у).
         """
         research_id = self.research_id_for_run(workspace_id=workspace_id, run_id=run_id)
@@ -181,6 +191,7 @@ class ResearchCaseService:
             source_id = source_ids.get(url)
             if source_id is None:
                 continue
+            classification = str(finding.get("classification") or "").strip() or None
             candidate_id = self.add_candidate(
                 research_id,
                 source_id=source_id,
@@ -190,10 +201,57 @@ class ResearchCaseService:
                 description=str(finding.get("description") or finding.get("snippet") or "").strip(),
                 severity=str(finding.get("severity") or "medium"),
                 is_loophole=bool(finding.get("is_loophole")),
+                classification=classification,
             )
             if candidate_id is not None:
                 candidate_ids.append(candidate_id)
                 candidate_urls.append(url)
+        # Разметка младших исследователей: положительные метки (лазейка/схема)
+        # сохраняются в тот же research case как предварительные зацепки со
+        # сниппетом вместо прочитанной страницы; irrelevant/insufficient_data
+        # не несут вердикта и в каталог не претендуют.
+        triaged_by_category = {"loophole": "vulnerability", "fraud": "fraud_scheme"}
+        for item in triaged_items or []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            classification = triaged_by_category.get(str(item.get("category") or ""))
+            snippet = str(item.get("snippet") or "").strip()
+            if not url or classification is None or not snippet or url in source_ids:
+                continue
+            try:
+                with self._session.begin_nested():
+                    source_id = self.record_source(
+                        research_id,
+                        url=url,
+                        title=str(item.get("title") or "") or None,
+                        extracted_text=snippet,
+                        status="triaged",
+                        limitation_message=(
+                            "Предварительная разметка сниппета подзадачей; "
+                            "страница не прочитана"
+                        ),
+                    )
+                    source_ids[url] = source_id
+                    candidate_id = self.add_candidate(
+                        research_id,
+                        source_id=source_id,
+                        title=str(item.get("title") or "").strip(),
+                        evidence=snippet,
+                        category=str(item.get("content_type") or "") or None,
+                        description=str(item.get("reason") or "").strip(),
+                        severity="medium",
+                        is_loophole=True,
+                        classification=classification,
+                    )
+            except SQLAlchemyError:
+                log.warning(
+                    "[research_cases] triaged-зацепка %s пропущена из-за ошибки записи",
+                    url, exc_info=True,
+                )
+                continue
+            if candidate_id is not None:
+                candidate_ids.append(candidate_id)
         return {
             "research_id": int(research_id),
             "candidate_ids": candidate_ids,
@@ -312,8 +370,13 @@ class ResearchCaseService:
         description: str,
         severity: str,
         is_loophole: bool,
+        classification: str | None = None,
     ) -> int | None:
-        """Добавляет кандидат лишь из успешно извлечённого источника этого же запуска."""
+        """Добавляет кандидат лишь из успешно извлечённого источника этого же запуска.
+
+        ``classification`` — тип находки агента (vulnerability/fraud_scheme/
+        not_confirmed); все типы сохраняются и переносятся в общий каталог.
+        """
         contract = CaseContractV1(
             title=title,
             evidence=evidence,
@@ -325,17 +388,19 @@ class ResearchCaseService:
         return self._session.execute(
             text(
                 "INSERT INTO loophole_research_candidate "
-                "(research_id, source_id, title, evidence, category, description, severity, is_loophole) "
+                "(research_id, source_id, title, evidence, category, description, severity, "
+                "is_loophole, classification) "
                 "SELECT :research_id, source.source_id, :title, :evidence, :category, "
-                ":description, :severity, :is_loophole "
+                ":description, :severity, :is_loophole, :classification "
                 "FROM loophole_research_source AS source "
                 "WHERE source.source_id = :source_id AND source.research_id = :research_id "
-                "AND source.status = 'fetched' "
+                "AND source.status IN ('fetched', 'triaged') "
                 "RETURNING candidate_id"
             ),
             {
                 "research_id": research_id,
                 "source_id": source_id,
+                "classification": classification,
                 **asdict(contract),
             },
         ).scalar_one_or_none()
@@ -594,19 +659,24 @@ class ResearchCaseService:
         rows = self._session.execute(
             text(
                 "SELECT source.source_id, source.url, source.title AS source_title, "
-                "source.extracted_text, source.published_at, candidate.title AS candidate_title, "
+                "source.extracted_text, source.published_at, source.status AS source_status, "
+                "candidate.title AS candidate_title, "
                 "MAX(COALESCE(candidate.model_confidence, 0.0)) AS confidence, "
                 "MAX(CASE WHEN COALESCE(candidate.model_is_loophole, candidate.is_loophole) = TRUE "
-                "THEN 1 ELSE 0 END) AS effective_is_loophole "
+                "THEN 1 ELSE 0 END) AS effective_is_loophole, "
+                "MAX(CASE candidate.classification "
+                "WHEN 'vulnerability' THEN 3 WHEN 'fraud_scheme' THEN 2 "
+                "WHEN 'not_confirmed' THEN 1 ELSE 0 END) AS classification_rank "
                 "FROM loophole_research_source AS source "
                 "JOIN loophole_research_candidate AS candidate "
                 "ON candidate.source_id = source.source_id "
                 "WHERE source.research_id = :research_id "
-                "AND source.status = 'fetched' AND source.access_status = 'active' "
+                "AND source.status IN ('fetched', 'triaged') "
+                "AND source.access_status = 'active' "
                 "AND source.extracted_text IS NOT NULL AND source.extracted_text != '' "
                 "AND COALESCE(candidate.model_is_loophole, candidate.is_loophole) IS NOT NULL "
                 "GROUP BY source.source_id, source.url, source.title, source.extracted_text, "
-                "source.published_at, candidate.title "
+                "source.published_at, source.status, candidate.title "
                 "ORDER BY source.source_id"
             ),
             {"research_id": research_id},
@@ -628,6 +698,17 @@ class ResearchCaseService:
                 skipped += 1
                 continue
             effective_is_loophole = bool(row["effective_is_loophole"])
+            # Тип записи: явная классификация кандидата (vulnerability >
+            # fraud_scheme > not_confirmed); для исторических NULL — бинарный
+            # is_loophole. Все находки агента попадают в общий каталог.
+            record_classification = {
+                3: "vulnerability", 2: "fraud_scheme", 1: "not_confirmed",
+            }.get(int(row["classification_rank"])) or (
+                "vulnerability" if effective_is_loophole else "not_confirmed"
+            )
+            # Триажированный сниппет — не прочитанная страница: запись помечена
+            # отдельной моделью вердикта и легаси-контентом, решение за аудитором.
+            is_triaged = str(row["source_status"]) == "triaged"
             record_id = repo.insert_record(
                 LoopholeRecord(
                     sha256=source_sha,
@@ -635,19 +716,20 @@ class ResearchCaseService:
                     url=source_url,
                     snippet=content[:1000],
                     raw_text=content,
-                    content_status="full",
+                    content_status="legacy" if is_triaged else "full",
                     raw_text_len=len(content),
                     published_at=row["published_at"],
                     status="preliminary",
                     is_loophole=effective_is_loophole,
                     # Явный classification: insert_record дефолта не имеет,
                     # инвариант согласованности — repository.update_verdict.
-                    classification=(
-                        "vulnerability" if effective_is_loophole else "not_confirmed"
-                    ),
+                    classification=record_classification,
                     verdict_confidence=float(row["confidence"]),
-                    verdict_reason="Предварительная оценка из AI-исследования",
-                    verdict_model="research_preliminary",
+                    verdict_reason=(
+                        "Предварительная разметка сниппета подзадачей; страница не прочитана"
+                        if is_triaged else "Предварительная оценка из AI-исследования"
+                    ),
+                    verdict_model="subagent_triage" if is_triaged else "research_preliminary",
                 ),
                 session=self._session,
             )
