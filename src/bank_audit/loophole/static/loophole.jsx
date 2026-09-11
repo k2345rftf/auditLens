@@ -1965,6 +1965,13 @@ function LoopholeApp() {
     fraud_scheme: "мошенническая схема",
     not_confirmed: "ни уязвимость, ни мошенническая схема",
   }[recordClassification(r)] || "не размечено");
+  // Метки решений ЦК КС (loophole_verification_decision.decision) для карточки
+  // очереди и модалки вердикта.
+  const decisionLabel = (value) => ({
+    vulnerability: "Уязвимость",
+    fraud_scheme: "Мошенническая схема",
+    not_confirmed: "Не подтверждено",
+  }[value] || value);
 
   const downloadResearchReport = async (reportId, format) => {
     if (!reportId || researchAccessRef.current.readOnly || researchAccessRef.current.loading) return;
@@ -2796,7 +2803,31 @@ function LoopholeApp() {
                       </div>
                       <section className="lp-queue-reason" aria-labelledby="lp-queue-reason-title">
                         <h3 id="lp-queue-reason-title">Комментарий классификатора</h3>
-                        <p>{queueSelected.verdict_reason || "Комментарий не указан."}</p>
+                        <p>{(queueSelected.classifier_verdict_reason ?? queueSelected.verdict_reason) || "Комментарий не указан."}</p>
+                      </section>
+                      {/* Решения ЦК КС записи (все импорты): append-only
+                          loophole_verification_decision с автором и датой;
+                          queueSelected.decisions всегда массив (пустой, если
+                          решений нет), данные приходят с GET /queue. */}
+                      <section className="lp-queue-decisions" aria-labelledby="lp-queue-decisions-title">
+                        <h3 id="lp-queue-decisions-title">Решения ЦК КС</h3>
+                        {Array.isArray(queueSelected.decisions) && queueSelected.decisions.length > 0 ? (
+                          <ul className="lp-queue-decisions-list">
+                            {queueSelected.decisions.map(d => (
+                              <li key={d.decision_id} className="lp-queue-decision">
+                                <span className={`lp-queue-decision-type lp-decision-${d.decision}`}>
+                                  {decisionLabel(d.decision)}
+                                </span>
+                                <span className="lp-queue-decision-comment">{d.comment}</span>
+                                <span className="lp-queue-decision-meta">
+                                  {d.decided_by} · {fmtDate(d.decided_at)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p>Решений ЦК пока нет.</p>
+                        )}
                       </section>
                       <div className="lp-queue-detail-actions">
                         {queueSelected.url && (
@@ -3214,6 +3245,38 @@ function LoopholeApp() {
                     <span>собрано {fmtDate(rec.collected_at)}</span>
                   </div>
                 </div>
+                {/* Read-only контекст записи: решения ЦК КС и исходный
+                    комментарий классификатора. Блок только для записей
+                    очереди (поле decisions есть всегда, возможно пустой
+                    массив); у каталожных записей поля нет → блок скрыт,
+                    поведение модалки прежнее. */}
+                {Array.isArray(rec.decisions) && (
+                  <div className="lp-verdict-decisions">
+                    <div className="lp-verdict-decisions-title">Решения ЦК КС</div>
+                    {rec.decisions.length > 0 ? (
+                      <ul className="lp-verdict-decisions-list">
+                        {rec.decisions.map(d => (
+                          <li key={d.decision_id} className="lp-queue-decision">
+                            <span className={`lp-queue-decision-type lp-decision-${d.decision}`}>
+                              {decisionLabel(d.decision)}
+                            </span>
+                            <span className="lp-queue-decision-comment">{d.comment}</span>
+                            <span className="lp-queue-decision-meta">
+                              {d.decided_by} · {fmtDate(d.decided_at)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="lp-verdict-decisions-empty">Решений ЦК пока нет.</p>
+                    )}
+                    {rec.verdict_model !== "manual" && (rec.classifier_verdict_reason ?? rec.verdict_reason) && (
+                      <p className="lp-verdict-classifier-comment">
+                        Комментарий классификатора: {rec.classifier_verdict_reason ?? rec.verdict_reason}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="lp-verdict-field">
                   <label htmlFor="lp-mark-comment">Комментарий аудитора</label>
                   <textarea id="lp-mark-comment" rows={2} value={markComment}
