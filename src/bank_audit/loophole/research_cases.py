@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from ..hashing import sha256_text
 from . import repository as repo
+from .adapters import fetch_decorator
 from .models import LoopholeRecord
 
 log = logging.getLogger(__name__)
@@ -226,6 +227,9 @@ class ResearchCaseService:
                         url=url,
                         title=str(item.get("title") or "") or None,
                         extracted_text=snippet,
+                        # Сниппет — фрагмент поста: видимая дата публикации
+                        # не должна теряться на этапе триажа.
+                        published_at=fetch_decorator.published_date_from_text(snippet),
                         status="triaged",
                         limitation_message=(
                             "Предварительная разметка сниппета подзадачей; "

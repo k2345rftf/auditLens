@@ -396,3 +396,58 @@ def test_triaged_subagent_items_reach_catalog_as_preliminary_leads(session):
         persisted["research_id"], imported_by="analyst",
     )
     assert again["imported"] == 0
+
+
+def test_triaged_snippet_publication_date_reaches_source_and_catalog(session):
+    """Видимая дата triaged-сниппета сохраняется в источнике и переносится в каталог.
+
+    Битая/отсутствующая дата даёт NULL без исключений (_normalize_published_at
+    и published_date_from_text fail-closed по дате).
+    """
+    _create_import_schema(session)
+    service = ResearchCaseService(session)
+    persisted = service.persist_managed_run(
+        workspace_id=1,
+        run_id="run-triaged-dated",
+        query="проверь схемы",
+        findings=[],
+        sources=[],
+        triaged_items=[
+            {
+                "url": "https://example.ru/dated-post", "title": "Схема вывода",
+                "snippet": "Опубликовано 5 августа 2026: описание схемы вывода средств",
+                "category": "fraud", "content_type": "post", "reason": "Признаки обмана",
+            },
+            {
+                "url": "https://example.ru/undated-post", "title": "Без даты",
+                "snippet": "Описание мошеннической схемы без даты публикации",
+                "category": "fraud", "content_type": "post", "reason": "Признаки обмана",
+            },
+            {
+                "url": "https://example.ru/broken-date-post", "title": "Битая дата",
+                "snippet": "Опубликовано неизвестно когда: описание схемы вывода",
+                "category": "fraud", "content_type": "post", "reason": "Признаки обмана",
+            },
+        ],
+    )
+
+    rows = session.execute(
+        text("SELECT url, published_at FROM loophole_research_source ORDER BY source_id")
+    ).mappings().all()
+    by_url = {row["url"]: row["published_at"] for row in rows}
+    assert str(by_url["https://example.ru/dated-post"]).startswith("2026-08-05")
+    assert by_url["https://example.ru/undated-post"] is None
+    assert by_url["https://example.ru/broken-date-post"] is None
+
+    # Существующий перенос preliminary-источников в каталог несёт дату с собой.
+    imported = service.import_preliminary_sources(
+        persisted["research_id"], imported_by="analyst",
+    )
+    assert imported["imported"] == 3
+    record_row = session.execute(
+        text(
+            "SELECT published_at FROM loophole_record "
+            "WHERE url = 'https://example.ru/dated-post'"
+        )
+    ).scalar_one()
+    assert str(record_row).startswith("2026-08-05")
