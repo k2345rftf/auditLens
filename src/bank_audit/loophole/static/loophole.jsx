@@ -1990,13 +1990,8 @@ function LoopholeApp() {
     }
   };
 
-  // Ленивая загрузка полного контента записи (кэш — без повторных запросов).
-  const toggleContent = (id) => {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  // Ленивая загрузка полного контента записи в кэш (без повторных запросов).
+  const loadContent = (id) => {
     if (contentCache[id]) return;
     setContentCache(prev => ({...prev, [id]: {loading: true, data: null, error: null}}));
     fetch(`${API}/records/${id}/content`)
@@ -2004,6 +1999,28 @@ function LoopholeApp() {
       .then(data => setContentCache(prev => ({...prev, [id]: {loading: false, data, error: null}})))
       .catch(e => setContentCache(prev => ({...prev, [id]: {loading: false, data: null, error: String(e)}})));
   };
+
+  // Раскрытие/сворачивание деталей записи в таблице каталога.
+  const toggleContent = (id) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+    loadContent(id);
+  };
+
+  // Карточка очереди: при смене выбранной записи сбрасываем комментарий
+  // участника ЦК (поле карточки и поле модалки вердикта — одно состояние
+  // markComment) и лениво догружаем полный текст записи; contentCache
+  // исключает повторные сетевые запросы при возврате к записи. Состояние
+  // expanded (раскрытые детали каталога) здесь не трогаем: таблица каталога
+  // не должна раскрываться из-за просмотра карточки очереди.
+  const queueSelectedRecordId = queueSelected ? queueSelected.record_id : null;
+  useEffect(() => {
+    setMarkComment("");
+    if (queueSelectedRecordId) loadContent(queueSelectedRecordId);
+  }, [queueSelectedRecordId]);
 
   const toggleFullView = (id) => {
     setFullView(prev => {
@@ -2024,8 +2041,11 @@ function LoopholeApp() {
     return null; // legacy/нет данных
   };
 
-  // Развёрнутый блок контента под строкой.
-  const renderRecordContent = (r) => {
+  // Развёрнутый блок контента под строкой. opts.alwaysFull — режим карточки
+  // очереди: текст всегда развёрнут (lp-content-body-full), кнопка
+  // «Развернуть полностью» не показывается.
+  const renderRecordContent = (r, opts = {}) => {
+    const alwaysFull = !!opts.alwaysFull;
     const entry = contentCache[r.record_id];
     const sourceLink = r.url ? (
       <a href={r.url} target="_blank" rel="noopener noreferrer">открыть источник ↗</a>
@@ -2039,7 +2059,7 @@ function LoopholeApp() {
     const d = entry.data || {};
     const sizeKb = d.raw_text_len ? Math.ceil(d.raw_text_len / 1024) : null;
     const failed = d.content_status === "fetch_failed" || d.content_status === "empty";
-    const showFull = fullView.has(r.record_id);
+    const showFull = alwaysFull || fullView.has(r.record_id);
     return (
       <div className="lp-content-block" onClick={e => e.stopPropagation()}>
         <div className="lp-content-head">
@@ -2059,7 +2079,7 @@ function LoopholeApp() {
             Контент станет доступен после backfill.
           </div>
         )}
-        {!failed && (d.raw_text_len || 0) > 2000 && (
+        {!alwaysFull && !failed && (d.raw_text_len || 0) > 2000 && (
           <button type="button" className="lp-btn lp-btn-sm lp-content-more"
                   onClick={() => toggleFullView(r.record_id)}>
             {showFull ? "Свернуть" : "Развернуть полностью"}
@@ -2784,10 +2804,30 @@ function LoopholeApp() {
                              rel="noopener noreferrer">Открыть источник</a>
                         )}
                         {canMarkVerdict && <button type="button" className="lp-btn lp-btn-primary"
-                                onClick={() => { setMarkComment(""); setVerdictModal({record: queueSelected}); }}>
+                                onClick={() => setVerdictModal({record: queueSelected})}>
                           Проверить вердикт
                         </button>}
                       </div>
+                      {/* Комментарий участника ЦК — одно состояние markComment
+                          с полем модалки вердикта; сохраняется только через
+                          существующий вердикт-флоу (POST /records/verdict). */}
+                      {canMarkVerdict && (
+                        <section className="lp-verdict-field lp-queue-comment"
+                                 aria-labelledby="lp-queue-comment-label">
+                          <label id="lp-queue-comment-label" htmlFor="lp-queue-comment-input">
+                            Комментарий участника ЦК
+                          </label>
+                          <textarea id="lp-queue-comment-input" rows={3} value={markComment}
+                                    onChange={e => setMarkComment(e.target.value)}
+                                    placeholder="Комментарий сохранится вместе с вердиктом…"/>
+                        </section>
+                      )}
+                      {/* Полный текст записи: ленивая догрузка content-эндпоинтом,
+                          в карточке всегда развёрнут (прокрутка внутри блока). */}
+                      <section className="lp-queue-fulltext" aria-labelledby="lp-queue-fulltext-title">
+                        <h3 id="lp-queue-fulltext-title">Полный текст записи</h3>
+                        {renderRecordContent(queueSelected, {alwaysFull: true})}
+                      </section>
                     </article>
                   )}
                 </div>

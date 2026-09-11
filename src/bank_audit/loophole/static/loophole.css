@@ -1096,6 +1096,16 @@ html, body {
   gap: 8px;
   margin-top: 16px;
 }
+/* Поле комментария участника ЦК в карточке проверки: форма по образцу
+   .lp-verdict-field (класс переиспользуется в разметке), отступ — как у
+   соседних секций карточки. */
+.lp-queue-comment { margin-top: 14px; }
+/* Полный текст записи в самом низу карточки: развёрнутый блок сохраняет
+   прокрутку внутри себя (overflow-y у .lp-content-body-full) и не
+   расталкивает сетку карточки. */
+.lp-queue-fulltext { margin-top: 14px; }
+.lp-queue-fulltext h3 { margin: 0 0 6px; font-size: 0.78rem; }
+.lp-queue-fulltext .lp-content-body-full { max-height: 48vh; }
 
 /* ── Добавление источника: самостоятельная рабочая поверхность ──────────── */
 .lp-sources-surface {
