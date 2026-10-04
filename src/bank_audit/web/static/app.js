@@ -1,4 +1,4 @@
-// Собрано из app.jsx (sha256 7e0347a6d0eda5187d515f03749375233af7f9d459532b4dd81ff4bc4039a57c): scripts/build_frontend.js. Правьте .jsx, не этот файл.
+// Собрано из app.jsx (sha256 f5215a6b1184986f3c612c7db721a880d8c2b2e1a18d4734067661a8339ed2b6): scripts/build_frontend.js. Правьте .jsx, не этот файл.
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 /* global React, ReactDOM */
 const {
@@ -1788,13 +1788,13 @@ const BF_KIND = {
     tag: "Новость"
   },
   loophole: {
-    tag: "Уязвимости · Сбер"
+    tag: "Лазейки · Сбер"
   },
   bank_rating: {
     tag: "Банки · рейтинг"
   },
   exploit: {
-    tag: "Уязвимости"
+    tag: "Лазейки"
   }
 };
 
@@ -18579,7 +18579,7 @@ function LoopholePage({
   }, /*#__PURE__*/React.createElement("iframe", {
     ref: fr,
     src: "/static/loophole/loophole.html",
-    title: "\u0410\u0443\u0434\u0438\u0442 \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u0435\u0439",
+    title: "\u041B\u0430\u0437\u0435\u0439\u043A\u0438 \u0438 \u043C\u043E\u0448\u0435\u043D\u043D\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u0441\u0445\u0435\u043C\u044B",
     onLoad: e => {
       try {
         const w = e.currentTarget.contentWindow;
@@ -18864,7 +18864,7 @@ const AD_PAGE_RU = {
   reviews: "Аудит отзывов",
   ai: "ИИ-помощник",
   knowledge: "База знаний",
-  loophole: "Аудит уязвимостей",
+  loophole: "Лазейки",
   banks: "Банки",
   sources: "Источники",
   quality: "Качество",
@@ -19740,7 +19740,8 @@ const PU_EVAL_TAB = {
   "Обзор": "Новостные обзоры",
   "Отзывы": "Аудит отзывов",
   "Рынок": "Рынок · позиция",
-  "Уязвимости": "Аудит уязвимостей"
+  "Уязвимости": "Лазейки",
+  "Аудит уязвимостей": "Лазейки"
 };
 function PuAgentEval() {
   const me = useMe();
@@ -21765,10 +21766,10 @@ const NAV = [{
   was: "Отзывы"
 }, {
   id: "loophole",
-  label: "Аудит уязвимостей",
+  label: "Лазейки",
   icon: Ic.shield,
   group: "Анализ",
-  was: "Уязвимости"
+  was: "Аудит уязвимостей"
 }, {
   id: "overview",
   label: "Новостные обзоры",
@@ -21821,7 +21822,7 @@ const PAGES_FN = {
 // Номера синхронизированы с порядком в меню; итог берётся из NAV, а не хардкодом
 // Названия разделов для крошки в шапке. Номер берётся из порядка меню (navOrder),
 // а не пишется здесь: захардкоженные номера разошлись с меню после перестановки
-// вкладок («Уязвимости» в меню 05, в шапке было 06).
+// вкладок («Лазейки» в меню 05, в шапке было 06).
 const PAGE_LABELS = {
   overview: "Новостные обзоры",
   foryou: "Для вас",
@@ -21830,7 +21831,7 @@ const PAGE_LABELS = {
   reviews: "Аудит отзывов",
   ai: "ИИ-помощник",
   knowledge: "База знаний",
-  loophole: "Аудит уязвимостей",
+  loophole: "Лазейки",
   banks: "Банки",
   sources: "Источники",
   profile: "Профиль",

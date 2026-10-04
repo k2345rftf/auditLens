@@ -1,4 +1,4 @@
-"""Выгрузка общей базы «Уязвимостей» в Excel — в стиле AuditLens.
+"""Выгрузка общей базы «Лазеек» в Excel — в стиле AuditLens.
 
 Книга как у «Отзывов»: «Обзор» (фирменная шапка, штамп «Экспортировано из
 AuditLens», фильтры, плитки и родные графики Excel), «Записи» (всё, что видно
@@ -29,13 +29,13 @@ BANK_NAMES = {
     "other": "Другие банки",
 }
 TYPE_LABELS = {
-    "vulnerability": "Уязвимость", "fraud_scheme": "Мошенническая схема",
+    "vulnerability": "Лазейка", "fraud_scheme": "Мошенническая схема",
     "not_confirmed": "Не подтверждено", None: "Без вердикта",
 }
 TYPE_COLORS = {"vulnerability": "accent", "fraud_scheme": "legal", "not_confirmed": "ink3"}
 VERIFICATION_LABELS = {"awaiting": "Ждут проверки", "reviewed": "Проверено"}
 CLASSIFICATION_FILTERS = {
-    "confirmed": "Уязвимости и мошеннические схемы", "vulnerability": "Уязвимости",
+    "confirmed": "Лазейки и мошеннические схемы", "vulnerability": "Лазейки",
     "fraud_scheme": "Мошеннические схемы", "not_confirmed": "Не подтверждено",
     "all": "Все записи",
 }
@@ -129,7 +129,7 @@ def to_xlsx(records: list[dict], filters: dict) -> bytes:
     banks = Counter(bank_name(r.get("bank_slug")) for r in records)
     awaiting = sum(1 for r in records if r.get("awaiting"))
     reviewed = sum(1 for r in records if r.get("reviewed"))
-    title = "Уязвимости и мошеннические схемы"
+    title = "Лазейки и мошеннические схемы"
     fl = describe_filters(filters)
     sub = " · ".join([f"{len(records):,} записей".replace(",", " "), fl[0][1],
                       "вердикты модели и экспертов ЦК КС"])
@@ -138,7 +138,7 @@ def to_xlsx(records: list[dict], filters: dict) -> bytes:
     wb.properties.creator = "AuditLens"
     wb.properties.lastModifiedBy = "AuditLens"
     wb.properties.title = title
-    wb.properties.subject = "Общая база — раздел «Аудит уязвимостей»"
+    wb.properties.subject = "Общая база — раздел «Лазейки»"
     wb.properties.description = stamp_line()
     wb.properties.keywords = "AuditLens"
 
@@ -160,9 +160,9 @@ def to_xlsx(records: list[dict], filters: dict) -> bytes:
     # ── «Обзор» ──────────────────────────────────────────────────────────
     ov = wb.create_sheet("Обзор", 0)
     XL.sheet_base(ov, widths=[11.5] * 12, title=title)
-    row = XL.banner(ov, banner_png(eyebrow="Уязвимости · общая база", title=title,
+    row = XL.banner(ov, banner_png(eyebrow="Лазейки · общая база", title=title,
                                    subtitle=sub, width=1180), rows=8, width_px=1060)
-    XL.stamp(ov, row, text_=stamp_line() + " · раздел «Аудит уязвимостей»", span=12)
+    XL.stamp(ov, row, text_=stamp_line() + " · раздел «Лазейки»", span=12)
     row += 1
     fc = ov.cell(row=row, column=1,
                  value="Фильтры: " + " · ".join(f"{k.lower()}: {v}" for k, v in fl))
@@ -173,7 +173,7 @@ def to_xlsx(records: list[dict], filters: dict) -> bytes:
     row += 2
     row = XL.kpis(ov, row, [
         ("Записей", len(records), "в выгрузке"),
-        ("Уязвимости", kinds.get("vulnerability", 0), "вердикт модели или эксперта"),
+        ("Лазейки", kinds.get("vulnerability", 0), "вердикт модели или эксперта"),
         ("Мошеннические схемы", kinds.get("fraud_scheme", 0), "вердикт модели или эксперта"),
         ("Не подтверждено", kinds.get("not_confirmed", 0), "признаков лазейки нет"),
         ("Ждут проверки", awaiting, "решения эксперта ЦК КС ещё нет"),

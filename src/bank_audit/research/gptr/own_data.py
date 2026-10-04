@@ -8,7 +8,7 @@
     и у Сбера запрос упирался в таймаут — отчёт не получал ничего;
   • аналитики жалоб (сигналы, нормы, темы с динамикой, эскалация против
     рынка, группы похожих) отчёт не видел вовсе;
-  • раздела «Уязвимости» в отчёте не было.
+  • раздела «Лазейки» в отчёте не было.
 
 Теперь отчёт берёт данные тем же слоем, что вкладки и быстрый агент
 (ai/agent_tools): все площадки, LLM-разметка, проверенные цитаты. Данные
@@ -33,7 +33,7 @@ from . import runstate
 log = logging.getLogger(__name__)
 
 # Стороны фактов. «Наблюдается» — голос клиента (раздел «Голос клиента»),
-# «лазейка» — раздел «Уязвимости» (свой раздел отчёта).
+# «лазейка» — раздел «Лазейки» (свой раздел отчёта).
 OBSERVED = "observed"
 LOOPHOLE = "loophole"
 
@@ -84,7 +84,7 @@ _SCOPE_SYSTEM = """Ты выбираешь срез СОБСТВЕННЫХ ДА�
 - "complaints": true почти всегда: жалобы клиентов — реальный опыт с продуктом, и в
   сравнении банков они показывают, что болит у каждого. false — только если вопрос о
   тексте нормативного документа или только о лазейках;
-- "loopholes": true почти всегда: схемы обхода условий продукта (раздел «Аудит уязвимостей») —
+- "loopholes": true почти всегда: схемы обхода условий продукта (раздел «Лазейки») —
   предмет аудита и в сравнении банков, и в разборе жалоб. false — только если вопрос
   о тексте нормативного документа;
 - "category": категория витрины «Рынок» из перечня (ключ) или null;
@@ -454,12 +454,12 @@ def collect_loopholes(od: OwnData, plan, question: str) -> None:
         return
     st = lh.get("stats") or {}
     s_url = "#loophole"
-    txt = (f"Раздел «Аудит уязвимостей»: всего лазеек по всем банкам — {_n(st.get('all_banks_total'))} "
+    txt = (f"Раздел «Лазейки»: всего лазеек по всем банкам — {_n(st.get('all_banks_total'))} "
            f"(с {_dm(st.get('collected_since'))}), найдено за 30 дней — "
            f"{_n(st.get('all_banks_found_last_30d'))}; с меткой «{bank}» — "
            f"{_n(st.get('this_bank_tagged_total'))}. Все оценки предварительные: "
            f"экспертом не проверены — это возможные уязвимости, а не зафиксированные схемы.")
-    od.page(s_url, "AuditLens · Уязвимости: сводка раздела", [txt], "loopholes")
+    od.page(s_url, "AuditLens · Лазейки: сводка раздела", [txt], "loopholes")
     od.fact(subject=anchor, attribute="Лазейки: сводка раздела",
             value=_n(st.get("all_banks_total")), verbatim=txt, url=s_url, stance=LOOPHOLE)
     for r in own + other:
@@ -479,7 +479,7 @@ def collect_loopholes(od: OwnData, plan, question: str) -> None:
             f"Источник: {r.get('source') or '—'}; опубликовано {_dm(r.get('published'))}; "
             f"найдено системой {_dm(r.get('found'))}; статус: {state}.",
         ) if x]
-        od.page(url, f"AuditLens · Уязвимости: {title[:80]}", lines, "loopholes")
+        od.page(url, f"AuditLens · Лазейки: {title[:80]}", lines, "loopholes")
         tag = r.get("bank_tag") or ""
         subj = anchor if r.get("about_bank") else (tag if tag in labels else "")
         od.fact(subject=subj, attribute="Лазейка", value=title[:200],

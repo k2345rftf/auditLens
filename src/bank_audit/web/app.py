@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(parser_scheduler_loop()))
     if SCHEDULED_ANALYTICS_ENABLED:
         tasks.append(asyncio.create_task(scheduled_analytics_loop()))
-    # «Аудит уязвимостей»: отметка «не о банках» для новых записей внешнего
+    # «Лазейки»: отметка «не о банках» для новых записей внешнего
     # сборщика. Пока ручная дозаливка не сделана (таблица пуста), не пишет.
     from ..loophole.relevance import TAGGER_ENABLED, topic_tagger_loop
     if TAGGER_ENABLED:

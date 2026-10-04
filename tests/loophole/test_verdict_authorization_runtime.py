@@ -98,7 +98,7 @@ def test_catalog_verdict_is_read_only_without_explicit_permission(browser, capab
     """Отсутствующее, ложное и некорректное разрешение запрещают UI-маркировку."""
     page = _open(browser, capability=capability)
     try:
-        assert page.locator(".lp-rd .lp-kind").inner_text() == "Уязвимость"
+        assert page.locator(".lp-rd .lp-kind").inner_text() == "Лазейка"
         assert page.get_by_role("button", name="Изменить вердикт").count() == 0
         page.locator(".lp-rd .lp-kind").click()
         assert page.get_by_role("dialog").count() == 0
@@ -139,7 +139,7 @@ def test_revoked_permission_closes_dialog_and_removes_actions(browser, verdict_s
         page.get_by_role("alert").filter(has_text="Нет права изменять вердикт.").wait_for()
         assert dialog.count() == 0
         assert page.get_by_role("button", name="Изменить вердикт").count() == 0
-        assert page.locator(".lp-rd .lp-kind").inner_text() == "Уязвимость"
+        assert page.locator(".lp-rd .lp-kind").inner_text() == "Лазейка"
         assert len(page.evaluate("window.__verdictRequests")) == 1
     finally:
         page.close()

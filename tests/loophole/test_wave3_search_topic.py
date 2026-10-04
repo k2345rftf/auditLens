@@ -1,4 +1,4 @@
-"""«Аудит уязвимостей», волна 3 аудита 03.10: поиск по словам (УЯЗ-03) и
+"""«Лазейки», волна 3 аудита 03.10: поиск по словам (УЯЗ-03) и
 записи «не о банках» (УЯЗ-01). SQLite в памяти; LOWER переопределяется на
 юникодный — встроенный SQLite кириллицу в нижний регистр не переводит."""
 from __future__ import annotations
@@ -86,7 +86,7 @@ def test_any_dash_and_no_noun_stemming(session):
 
 
 def test_empty_confirmed_view_counts_hidden_offtopic_matches(session):
-    """Тип «уязвимости и схемы», совпадение только среди скрытых — кнопка к ним."""
+    """Тип «лазейки и схемы», совпадение только среди скрытых — кнопка к ним."""
     _unicode_lower(session)
     _add(session, "x", "Буланова рассказала о мечте", url="https://lenta.ru/n/1",
          classification="not_confirmed", is_loophole=False)

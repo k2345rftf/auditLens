@@ -1,5 +1,5 @@
-/* Собрано из loophole.jsx (sha256 666ab20ccd21285bec45b1794133ea6da37726d968981e49c163e0488c15a105). Не править вручную: node scripts/build_loophole_js.mjs */
-/* loophole.jsx — вкладка «Уязвимости» в системе AuditLens: база (сводка, фильтры,
+/* Собрано из loophole.jsx (sha256 f0b7772aed526ac134623d8560d4c53b90c25a1a2864d24db1bc8000f0d809f3). Не править вручную: node scripts/build_loophole_js.mjs */
+/* loophole.jsx — вкладка «Лазейки» в системе AuditLens: база (сводка, фильтры,
    список и карточка записи, Excel, аудит-дела), исследование агента одной
    колонкой, очередь решений ЦК КС и панель «Доступ». Права решает сервер. */
 const {
@@ -452,7 +452,7 @@ function useFocusLayer(active, containerRef, onClose, initialFocusRef, restoreFa
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-// ── Вкладка «Уязвимости» в системе AuditLens: общие элементы интерфейса ─────
+// ── Вкладка «Лазейки» в системе AuditLens: общие элементы интерфейса ─────────
 // Иконки — inline SVG (правило системы: никаких эмодзи), 16×16, штрих 1.5.
 const LP_ICONS = {
   search: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/>',
@@ -496,10 +496,10 @@ function Icon({
   });
 }
 
-// Классы записи: уязвимость — красный (риск), схема — фиолетовый (--legal),
+// Классы записи: лазейка — красный (риск), схема — фиолетовый (--legal),
 // не подтверждено — нейтральный, без вердикта — пунктир.
 const KIND_LABELS = {
-  vulnerability: ["Уязвимость", "neg"],
+  vulnerability: ["Лазейка", "neg"],
   fraud_scheme: ["Мошенническая схема", "legal"],
   not_confirmed: ["Не подтверждено", "neu"],
   none: ["Без вердикта", "dash"]
@@ -591,7 +591,7 @@ function LoopholeApp() {
   const [fTo, setFTo] = useState("");
   const [fVerification, setFVerification] = useState("all");
   // По умолчанию — только находки: на проде 99% базы — «не подтверждено»,
-  // и уязвимости со схемами тонули среди них.
+  // и лазейки со схемами тонули среди них.
   const [fClassification, setFClassification] = useState("confirmed");
   // Порядок базы — сортирует сервер: сначала новые или по вероятности модели.
   const [fSort, setFSort] = useState("new");
@@ -2218,7 +2218,7 @@ function LoopholeApp() {
   // Метки решений ЦК КС (loophole_verification_decision.decision) для карточки
   // очереди и модалки вердикта.
   const decisionLabel = value => ({
-    vulnerability: "Уязвимость",
+    vulnerability: "Лазейка",
     fraud_scheme: "Мошенническая схема",
     not_confirmed: "Не подтверждено"
   })[value] || value;
@@ -2295,7 +2295,7 @@ function LoopholeApp() {
   });
   const agentBusy = clarifySubmitting || chatLoading;
 
-  // ══ Вкладка «Уязвимости» в системе AuditLens (макет, согласованный 27.09) ══
+  // ══ Вкладка «Лазейки» в системе AuditLens (макет, согласованный 27.09) ══
   // База — сводка, фильтры, список и карточка записи; «Исследовать» — одна
   // колонка с ходом работы и находками; «Очередь» — решение на карточке;
   // «Доступ» — панель администратора. Права по-прежнему решает сервер.
@@ -2412,7 +2412,7 @@ function LoopholeApp() {
     }).catch(() => {});
   }, [phase, chatLoading, workspaceId, researchReadOnly]);
 
-  // Суть — только уязвимостям и схемам, один вызов модели на запись (сервер
+  // Суть — только лазейкам и схемам, один вызов модели на запись (сервер
   // сохраняет результат). «Не подтверждено» модель не трогает.
   const ensureSummary = record => {
     if (!record) return;
@@ -2614,7 +2614,7 @@ function LoopholeApp() {
     return {
       kind: "document",
       url: record.url || null,
-      title: (record.headline || record.title || record.snippet || "Запись раздела «Аудит уязвимостей»").slice(0, 300),
+      title: (record.headline || record.title || record.snippet || "Запись раздела «Лазейки»").slice(0, 300),
       note: bits.join(" · ").slice(0, 900)
     };
   };
@@ -2942,7 +2942,7 @@ function LoopholeApp() {
       size: 20
     })), /*#__PURE__*/React.createElement("h1", {
       className: "lp-state-t"
-    }, "\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u0430 \u043A \u0440\u0430\u0437\u0434\u0435\u043B\u0443 \xAB\u0410\u0443\u0434\u0438\u0442 \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u0435\u0439\xBB"), /*#__PURE__*/React.createElement("p", {
+    }, "\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u0430 \u043A \u0440\u0430\u0437\u0434\u0435\u043B\u0443 \xAB\u041B\u0430\u0437\u0435\u0439\u043A\u0438\xBB"), /*#__PURE__*/React.createElement("p", {
       className: "lp-state-x"
     }, "\u0423\u0447\u0451\u0442\u043D\u0430\u044F \u0437\u0430\u043F\u0438\u0441\u044C \u043D\u0435 \u0430\u0432\u0442\u043E\u0440\u0438\u0437\u043E\u0432\u0430\u043D\u0430. \u041E\u0431\u0440\u0430\u0442\u0438\u0442\u0435\u0441\u044C \u043A \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0443 \u043C\u043E\u0434\u0443\u043B\u044F."));
   }
@@ -2987,7 +2987,7 @@ function LoopholeApp() {
     className: "lp-eyebrow"
   }, "\u0410\u043D\u0430\u043B\u0438\u0437 \xB7 \u0441\u0445\u0435\u043C\u044B \u0438 \u043B\u0430\u0437\u0435\u0439\u043A\u0438"), /*#__PURE__*/React.createElement("h1", {
     className: "lp-ph-t"
-  }, "\u0410\u0443\u0434\u0438\u0442 \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u0435\u0439"), /*#__PURE__*/React.createElement("p", {
+  }, "\u041B\u0430\u0437\u0435\u0439\u043A\u0438"), /*#__PURE__*/React.createElement("p", {
     className: "lp-ph-meta"
   }, "\u041B\u0430\u0437\u0435\u0439\u043A\u0438 \u0438 \u043C\u043E\u0448\u0435\u043D\u043D\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u0441\u0445\u0435\u043C\u044B \u0432 \u043F\u0440\u043E\u0434\u0443\u043A\u0442\u0430\u0445 \u0431\u0430\u043D\u043A\u043E\u0432. \u0417\u0430\u043F\u0438\u0441\u0438 \u0441\u043E\u0431\u0438\u0440\u0430\u044E\u0442\u0441\u044F \u0438\u0437 \u043E\u0431\u0441\u0443\u0436\u0434\u0435\u043D\u0438\u0439 \u043D\u0430 \u0444\u043E\u0440\u0443\u043C\u0430\u0445 \u0438 \u0432 \u0441\u043E\u0446\u0441\u0435\u0442\u044F\u0445, \u043D\u043E\u0432\u043E\u0441\u0442\u0435\u0439 \u0438 \u0441\u0430\u0439\u0442\u043E\u0432 \u0431\u0430\u043D\u043A\u043E\u0432; \u043C\u043E\u0434\u0435\u043B\u044C \u043E\u0442\u043C\u0435\u0447\u0430\u0435\u0442 \u0432\u043E\u0437\u043C\u043E\u0436\u043D\u044B\u0435 \u043D\u0430\u0445\u043E\u0434\u043A\u0438, \u043E\u043A\u043E\u043D\u0447\u0430\u0442\u0435\u043B\u044C\u043D\u044B\u0439 \u0432\u0435\u0440\u0434\u0438\u043A\u0442 \u0432\u044B\u043D\u043E\u0441\u0438\u0442 \u044D\u043A\u0441\u043F\u0435\u0440\u0442 \u0426\u041A \u041A\u0421.")), canAdmin && /*#__PURE__*/React.createElement("div", {
     className: "lp-ph-act"
@@ -3103,7 +3103,7 @@ function LoopholeApp() {
     onClick: () => applyPeriod(fPeriod === "7" ? "all" : "7")
   }), kpi({
     on: fClassification === "vulnerability",
-    label: "Уязвимости",
+    label: "Лазейки",
     tone: "neg",
     value: totals && totals.vulnerability,
     sub: totals ? reviewedLine(totals.vulnerability, totals.awaiting_vulnerability) : "…",
@@ -3179,7 +3179,7 @@ function LoopholeApp() {
     name: "filter"
   }), "\u0424\u0438\u043B\u044C\u0442\u0440\u044B", activeFilterCount ? ` · ${activeFilterCount}` : "")), /*#__PURE__*/React.createElement("div", {
     className: "lp-frow" + (showFilters ? " lp-frow-show" : "")
-  }, seg("Тип записи", fClassification, [["confirmed", "Уязвимости и схемы", types && types.confirmed], ["vulnerability", "Уязвимости", types && types.vulnerability], ["fraud_scheme", "Схемы", types && types.fraud_scheme], ["not_confirmed", "Не подтверждено", types && types.not_confirmed], ["all", "Все", types && types.all]], setFClassification), /*#__PURE__*/React.createElement("button", {
+  }, seg("Тип записи", fClassification, [["confirmed", "Лазейки и схемы", types && types.confirmed], ["vulnerability", "Лазейки", types && types.vulnerability], ["fraud_scheme", "Схемы", types && types.fraud_scheme], ["not_confirmed", "Не подтверждено", types && types.not_confirmed], ["all", "Все", types && types.all]], setFClassification), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "lp-dd" + (fBanks.length ? " lp-dd-on" : ""),
     "data-pop-anchor": "banks",
@@ -3541,7 +3541,7 @@ function LoopholeApp() {
     const awaiting = !manual && !r.reviewed && (r.awaiting === true || r.is_loophole === true);
     const line = positive ? r.summary || r.verdict_reason : null;
     // Вероятность — только у находок: у «не подтверждено» она читалась бы
-    // как «вероятно уязвимость».
+    // как «вероятно лазейка».
     const conf = manual || !positive ? null : pctOf(r.verdict_confidence);
     const bank = knownBank(r.bank_slug);
     return /*#__PURE__*/React.createElement("div", {
@@ -3630,7 +3630,7 @@ function LoopholeApp() {
   };
   const notConfirmedHidden = fClassification === "confirmed" && types ? types.not_confirmed : 0;
   const offtopicHidden = facets && facets.offtopic ? facets.offtopic : 0;
-  // скрытые «не о банках» при любом типе: при «уязвимости и схемы» пустая
+  // скрытые «не о банках» при любом типе: при «лазейки и схемы» пустая
   // выдача может прятать совпадения именно среди них
   const offtopicAll = facets && facets.offtopic_all ? facets.offtopic_all : 0;
   const pickedVisible = records.filter(r => selected.has(r.record_id)).length;
@@ -3676,7 +3676,7 @@ function LoopholeApp() {
     onClick: () => setFTopic("bank")
   }, "\u0421\u043A\u0440\u044B\u0442\u044C")), notConfirmedHidden > 0 && /*#__PURE__*/React.createElement("div", {
     className: "lp-hid"
-  }, /*#__PURE__*/React.createElement("span", null, "\u0415\u0449\u0451 ", fmtInt(notConfirmedHidden), " ", lpPlural(notConfirmedHidden, "запись", "записи", "записей"), " \u0431\u0435\u0437 \u043D\u0430\u0445\u043E\u0434\u043A\u0438 \u0441\u043A\u0440\u044B\u0442\u044B: \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B\u0430 \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u044C \u0438\u043B\u0438 \u0441\u0445\u0435\u043C\u0443."), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", null, "\u0415\u0449\u0451 ", fmtInt(notConfirmedHidden), " ", lpPlural(notConfirmedHidden, "запись", "записи", "записей"), " \u0431\u0435\u0437 \u043D\u0430\u0445\u043E\u0434\u043A\u0438 \u0441\u043A\u0440\u044B\u0442\u044B: \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B\u0430 \u043B\u0430\u0437\u0435\u0439\u043A\u0443 \u0438\u043B\u0438 \u0441\u0445\u0435\u043C\u0443."), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "lp-btn-text",
     onClick: () => setFClassification("all")
@@ -3741,7 +3741,7 @@ function LoopholeApp() {
     className: "lp-state-t"
   }, "\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043D\u0430\u0448\u043B\u043E\u0441\u044C"), /*#__PURE__*/React.createElement("p", {
     className: "lp-state-x"
-  }, fClassification === "confirmed" && notConfirmedHidden ? "Среди уязвимостей и схем совпадений нет, но есть записи без находки. Покажите все или начните исследование по этой теме." : "Под выбранные фильтры не подходит ни одна запись. Уберите часть фильтров или начните исследование по этой теме."), /*#__PURE__*/React.createElement("div", {
+  }, fClassification === "confirmed" && notConfirmedHidden ? "Среди лазеек и схем совпадений нет, но есть записи без находки. Покажите все или начните исследование по этой теме." : "Под выбранные фильтры не подходит ни одна запись. Уберите часть фильтров или начните исследование по этой теме."), /*#__PURE__*/React.createElement("div", {
     className: "lp-state-a"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
@@ -3779,7 +3779,7 @@ function LoopholeApp() {
     const d = draftOf(r.record_id);
     const ok = !!(d.cls && (d.comment || "").trim());
     const modelKind = recordKind(r);
-    const options = [["vulnerability", "Уязвимость", "1"], ["fraud_scheme", "Мошенническая схема", "2"], ["not_confirmed", "Не подтверждено", "3"]];
+    const options = [["vulnerability", "Лазейка", "1"], ["fraud_scheme", "Мошенническая схема", "2"], ["not_confirmed", "Не подтверждено", "3"]];
     return /*#__PURE__*/React.createElement("div", {
       className: "lp-dec"
     }, /*#__PURE__*/React.createElement("div", {
@@ -3977,7 +3977,7 @@ function LoopholeApp() {
   }, "\u0420\u0435\u0448\u0435\u043D\u0438\u0435 \u0432\u044B\u043D\u043E\u0441\u0438\u0442 \u044D\u043A\u0441\u043F\u0435\u0440\u0442 \u0426\u041A \u041A\u0421.")))));
 
   // ── Исследование ───────────────────────────────────────────────────────────
-  const SUGGESTIONS = ["Схемы с оплатой по QR-коду в СБП", "Как обходят лимиты на снятие наличных", "Лазейки в бонусах за приглашение друзей", "Уязвимости в кэшбэке за оплату ЖКУ"];
+  const SUGGESTIONS = ["Схемы с оплатой по QR-коду в СБП", "Как обходят лимиты на снятие наличных", "Лазейки в бонусах за приглашение друзей", "Лазейки в кэшбэке за оплату ЖКУ"];
   const toolCount = (name, failed = false) => toolEvents.filter(e => e.name === name && (failed ? e.kind === "result" && e.status === "failed" : e.kind === "call")).length;
   const searchCalls = toolCount("audit_web_search");
   const fetchCalls = toolCount("audit_web_fetch");
@@ -4244,7 +4244,7 @@ function LoopholeApp() {
     className: "lp-welcome"
   }, /*#__PURE__*/React.createElement("div", {
     className: "lp-eyebrow"
-  }, "\u041D\u043E\u0432\u043E\u0435 \u0438\u0441\u0441\u043B\u0435\u0434\u043E\u0432\u0430\u043D\u0438\u0435"), /*#__PURE__*/React.createElement("h2", null, "\u0427\u0442\u043E \u043F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C?"), /*#__PURE__*/React.createElement("p", null, "\u0410\u0433\u0435\u043D\u0442 \u0438\u0449\u0435\u0442 \u043E\u0431\u0441\u0443\u0436\u0434\u0435\u043D\u0438\u044F \u043D\u0430 \u0444\u043E\u0440\u0443\u043C\u0430\u0445 \u0438 \u0441\u0430\u0439\u0442\u0430\u0445 \u0431\u0430\u043D\u043A\u043E\u0432, \u0447\u0438\u0442\u0430\u0435\u0442 \u043D\u0430\u0439\u0434\u0435\u043D\u043D\u044B\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u044B \u0438 \u0440\u0430\u0437\u043C\u0435\u0447\u0430\u0435\u0442 \u043D\u0430\u0445\u043E\u0434\u043A\u0438: \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u044C, \u043C\u043E\u0448\u0435\u043D\u043D\u0438\u0447\u0435\u0441\u043A\u0430\u044F \u0441\u0445\u0435\u043C\u0430 \u0438\u043B\u0438 \u043D\u0438 \u0442\u043E \u043D\u0438 \u0434\u0440\u0443\u0433\u043E\u0435. \u041D\u0430\u0445\u043E\u0434\u043A\u0438 \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u043E\u0431\u0449\u0443\u044E \u0431\u0430\u0437\u0443 \u0438 \u0436\u0434\u0443\u0442 \u0440\u0435\u0448\u0435\u043D\u0438\u044F \u044D\u043A\u0441\u043F\u0435\u0440\u0442\u0430 \u0426\u041A \u041A\u0421."), /*#__PURE__*/React.createElement("div", {
+  }, "\u041D\u043E\u0432\u043E\u0435 \u0438\u0441\u0441\u043B\u0435\u0434\u043E\u0432\u0430\u043D\u0438\u0435"), /*#__PURE__*/React.createElement("h2", null, "\u0427\u0442\u043E \u043F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C?"), /*#__PURE__*/React.createElement("p", null, "\u0410\u0433\u0435\u043D\u0442 \u0438\u0449\u0435\u0442 \u043E\u0431\u0441\u0443\u0436\u0434\u0435\u043D\u0438\u044F \u043D\u0430 \u0444\u043E\u0440\u0443\u043C\u0430\u0445 \u0438 \u0441\u0430\u0439\u0442\u0430\u0445 \u0431\u0430\u043D\u043A\u043E\u0432, \u0447\u0438\u0442\u0430\u0435\u0442 \u043D\u0430\u0439\u0434\u0435\u043D\u043D\u044B\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u044B \u0438 \u0440\u0430\u0437\u043C\u0435\u0447\u0430\u0435\u0442 \u043D\u0430\u0445\u043E\u0434\u043A\u0438: \u043B\u0430\u0437\u0435\u0439\u043A\u0430, \u043C\u043E\u0448\u0435\u043D\u043D\u0438\u0447\u0435\u0441\u043A\u0430\u044F \u0441\u0445\u0435\u043C\u0430 \u0438\u043B\u0438 \u043D\u0438 \u0442\u043E \u043D\u0438 \u0434\u0440\u0443\u0433\u043E\u0435. \u041D\u0430\u0445\u043E\u0434\u043A\u0438 \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u043E\u0431\u0449\u0443\u044E \u0431\u0430\u0437\u0443 \u0438 \u0436\u0434\u0443\u0442 \u0440\u0435\u0448\u0435\u043D\u0438\u044F \u044D\u043A\u0441\u043F\u0435\u0440\u0442\u0430 \u0426\u041A \u041A\u0421."), /*#__PURE__*/React.createElement("div", {
     className: "lp-sugg"
   }, SUGGESTIONS.map(s => /*#__PURE__*/React.createElement("button", {
     key: s,
@@ -4527,9 +4527,9 @@ function LoopholeApp() {
       className: "lp-pop-p"
     }, /*#__PURE__*/React.createElement("b", null, "\u0412\u0435\u0440\u0434\u0438\u043A\u0442"), " \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u0441\u0442\u0430\u0432\u0438\u0442 \u043C\u043E\u0434\u0435\u043B\u044C \u043F\u0440\u0438 \u0441\u0431\u043E\u0440\u0435 \u0437\u0430\u043F\u0438\u0441\u0438. \u041E\u043A\u043E\u043D\u0447\u0430\u0442\u0435\u043B\u044C\u043D\u044B\u0439 \u0432\u044B\u043D\u043E\u0441\u0438\u0442 \u044D\u043A\u0441\u043F\u0435\u0440\u0442 \u0426\u041A \u041A\u0421; \u043F\u043E\u043A\u0430 \u043E\u043D \u043D\u0435 \u0440\u0435\u0448\u0438\u043B, \u0437\u0430\u043F\u0438\u0441\u044C \u043F\u043E\u043C\u0435\u0447\u0435\u043D\u0430 \xAB\u0436\u0434\u0451\u0442 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438\xBB."), /*#__PURE__*/React.createElement("p", {
       className: "lp-pop-p"
-    }, /*#__PURE__*/React.createElement("b", null, "\u0412\u0435\u0440\u043E\u044F\u0442\u043D\u043E\u0441\u0442\u044C"), " \u2014 \u043D\u0430\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u0437\u0430\u043F\u0438\u0441\u044C \u043F\u043E\u0445\u043E\u0436\u0430 \u043D\u0430 \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u044C \u0438\u043B\u0438 \u0441\u0445\u0435\u043C\u0443 \u043F\u043E \u043E\u0446\u0435\u043D\u043A\u0435 \u043C\u043E\u0434\u0435\u043B\u0438. \u042D\u0442\u043E \u043D\u0435 \u0432\u0435\u0440\u043E\u044F\u0442\u043D\u043E\u0441\u0442\u044C \u0443\u0449\u0435\u0440\u0431\u0430."), /*#__PURE__*/React.createElement("p", {
+    }, /*#__PURE__*/React.createElement("b", null, "\u0412\u0435\u0440\u043E\u044F\u0442\u043D\u043E\u0441\u0442\u044C"), " \u2014 \u043D\u0430\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u0437\u0430\u043F\u0438\u0441\u044C \u043F\u043E\u0445\u043E\u0436\u0430 \u043D\u0430 \u043B\u0430\u0437\u0435\u0439\u043A\u0443 \u0438\u043B\u0438 \u0441\u0445\u0435\u043C\u0443 \u043F\u043E \u043E\u0446\u0435\u043D\u043A\u0435 \u043C\u043E\u0434\u0435\u043B\u0438. \u042D\u0442\u043E \u043D\u0435 \u0432\u0435\u0440\u043E\u044F\u0442\u043D\u043E\u0441\u0442\u044C \u0443\u0449\u0435\u0440\u0431\u0430."), /*#__PURE__*/React.createElement("p", {
       className: "lp-pop-p"
-    }, /*#__PURE__*/React.createElement("b", null, "\u0421\u0443\u0442\u044C"), " \u043C\u043E\u0434\u0435\u043B\u044C \u0441\u043E\u0441\u0442\u0430\u0432\u043B\u044F\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0443\u044F\u0437\u0432\u0438\u043C\u043E\u0441\u0442\u0435\u0439 \u0438 \u0441\u0445\u0435\u043C. \u0423 \u0437\u0430\u043F\u0438\u0441\u0435\u0439 \u0431\u0435\u0437 \u043D\u0430\u0445\u043E\u0434\u043A\u0438 \u043E\u0441\u0442\u0430\u0451\u0442\u0441\u044F \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A\u043B\u0430\u0441\u0441\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440\u0430 \u0438\u0437 \u0442\u043E\u0433\u043E \u0436\u0435 \u0432\u044B\u0437\u043E\u0432\u0430, \u0447\u0442\u043E \u0438 \u0432\u0435\u0440\u0434\u0438\u043A\u0442."));
+    }, /*#__PURE__*/React.createElement("b", null, "\u0421\u0443\u0442\u044C"), " \u043C\u043E\u0434\u0435\u043B\u044C \u0441\u043E\u0441\u0442\u0430\u0432\u043B\u044F\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043B\u0430\u0437\u0435\u0435\u043A \u0438 \u0441\u0445\u0435\u043C. \u0423 \u0437\u0430\u043F\u0438\u0441\u0435\u0439 \u0431\u0435\u0437 \u043D\u0430\u0445\u043E\u0434\u043A\u0438 \u043E\u0441\u0442\u0430\u0451\u0442\u0441\u044F \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A\u043B\u0430\u0441\u0441\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440\u0430 \u0438\u0437 \u0442\u043E\u0433\u043E \u0436\u0435 \u0432\u044B\u0437\u043E\u0432\u0430, \u0447\u0442\u043E \u0438 \u0432\u0435\u0440\u0434\u0438\u043A\u0442."));
   })();
 
   // ── Доступ (администратор) ─────────────────────────────────────────────────

@@ -906,7 +906,7 @@ def test_catalog_exposes_read_only_published_loophole_scope_without_false_query_
         assert page.locator("#lp-filter-status").count() == 0
         # По умолчанию — только находки: 99% базы на проде — «не подтверждено».
         types = page.get_by_role("group", name="Тип записи")
-        assert types.get_by_role("button", name="Уязвимости и схемы").get_attribute(
+        assert types.get_by_role("button", name="Лазейки и схемы").get_attribute(
             "aria-pressed") == "true"
         assert page.locator(".lp-scope-indicator").count() == 0
 
