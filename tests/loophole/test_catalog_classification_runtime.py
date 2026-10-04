@@ -91,7 +91,7 @@ def test_browser_marks_filters_and_reloads_with_real_api(browser, client, sessio
         page.goto("http://catalog.test/")
         items = page.locator("#lp-panel-catalog .lp-c")
         expect(items).to_have_count(2)
-        show("Уязвимости")
+        show("Лазейки")
         expect(items).to_have_count(1)
         expect(items).to_contain_text("Первый кейс")
         # Находка модели без решения эксперта решается в очереди, с отменой 10 секунд.
@@ -104,7 +104,7 @@ def test_browser_marks_filters_and_reloads_with_real_api(browser, client, sessio
         page.clock.run_for(10_500)
         expect(page.locator(".lp-qi")).to_have_count(1)
         page.get_by_role("tab", name="База").click()
-        show("Уязвимости")
+        show("Лазейки")
         expect(page.get_by_text("Ничего не нашлось")).to_be_visible()
         show("Схемы")
         expect(items).to_have_count(2)
@@ -118,13 +118,13 @@ def test_browser_marks_filters_and_reloads_with_real_api(browser, client, sessio
         expect(items).to_contain_text("Первый кейс")
         open_record("Первый кейс")
         page.screenshot(path=str(tmp_path / f"classification-reader-{width}.png"), full_page=True)
-        change_verdict("Уязвимость", "Всё же лазейка в условиях")
+        change_verdict("Лазейка", "Всё же лазейка в условиях")
         page.reload()
         expect(items).to_have_count(2)
         # После перезагрузки — фильтр по умолчанию: только находки.
         expect(page.get_by_role("group", name="Тип записи").get_by_role(
-            "button", name=re.compile("^Уязвимости и схемы"))).to_have_attribute("aria-pressed", "true")
-        expect(items.filter(has_text="Первый кейс").locator(".lp-kind")).to_have_text("Уязвимость")
+            "button", name=re.compile("^Лазейки и схемы"))).to_have_attribute("aria-pressed", "true")
+        expect(items.filter(has_text="Первый кейс").locator(".lp-kind")).to_have_text("Лазейка")
         page.screenshot(path=str(tmp_path / f"classification-catalog-{width}.png"), full_page=True)
         assert not errors
     finally:

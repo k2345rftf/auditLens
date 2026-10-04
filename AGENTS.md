@@ -28,7 +28,7 @@ Critic регуляркой сверяет каждое число в текст
   это плоские SQL-файлы в `migrations/` (см. §6).
 - **Frontend:** React 18 **без сборки и без node** — `index.html` + `app.jsx`,
   Babel-standalone транспилирует JSX прямо в браузере. Графики — Chart.js.
-  Модуль раздела «Аудит уязвимостей» во фрейме предсобран (см. §7 и `DESIGN.md`).
+  Модуль «Лазеек» во фрейме предсобран (см. §7 и `DESIGN.md`).
 - **LLM:** любой OpenAI-совместимый эндпоинт (прод — Foundation Models Cloud.ru).
   Пять тиров моделей: FAST / SMART / REASONING / ANALYST / INSIGHT + деградационная
   цепочка `явный аргумент → спец-env → SMART/FAST → LLM_MODEL_NAME → хардкод`
@@ -146,6 +146,8 @@ auditlens quality                      # data-quality чеки
 ## 7. Соглашения по коду
 
 - Язык комментариев, докстрингов, коммитов и документации — **русский**.
+- Все спецификации и артефакты (спеки, тикеты/issues, wayfinder-карты, ADR,
+  глоссарий и пр.) — **только на русском**, хранятся в `docs/loophole/matt/`.
 - Ruff: line-length 100, Python 3.11+; `.editorconfig`: UTF-8, LF, 4 пробела,
   final newline, trim trailing whitespace.
 - `from __future__ import annotations` в начале модулей — распространённый паттерн.
@@ -161,9 +163,9 @@ auditlens quality                      # data-quality чеки
   **без `Co-Authored-By`-трейлеров**; фича-ветки → PR в `main`.
 - Фронт основного сайта — `index.html` + `app.jsx`, **без сборки**: правишь файл,
   обновляешь страницу; ошибки парсинга JSX смотреть в консоли DevTools. Исключение —
-  модуль раздела «Аудит уязвимостей»: `loophole.jsx` предсобирается в `loophole.js`
+  модуль «Лазейки»: `loophole.jsx` предсобирается в `loophole.js`
   (`node scripts/build_loophole_js.mjs`, в коммит оба файла; тест сверяет sha256).
-- **Названия разделов** (с 01.10.2026), в порядке меню: «Аудит отзывов», «Аудит уязвимостей»,
+- **Названия разделов** (с 01.10.2026), в порядке меню: «Аудит отзывов», «Лазейки»,
   «Новостные обзоры», «ИИ-помощник»; «Данные» свёрнуты; «Рынок · позиция» — режим «Новостных
   обзоров» (`OvSeg`). В тексте не склоняются — «в разделе «Аудит отзывов»». Адреса (`#overview`,
   `#market`, `#reviews`, `#ai`, `#loophole`) и ключи прежние; вход в приложение — `#overview`.
@@ -279,3 +281,27 @@ auditlens quality                      # data-quality чеки
 - [2026-09-08] Проблема: отключение core.autocrlf только для diff-check превращает CRLF
   рабочей копии в ложные trailing whitespace → Решение: запускать git diff --check
   с настройками репозитория, не менять нормализацию строк ради подавления предупреждений.
+
+## Agent skills
+
+### Issue tracker
+
+Постоянные issues — в GitHub Issues (`gh` CLI); файловые артефакты фичи (спеки,
+тикеты) — в `docs/loophole/matt/<feature>/`. Тексты issues, спеков и тикетов —
+на русском. См. `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Пять канонических меток: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. См. `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `docs/loophole/matt/GLOSSARY.md` + `docs/loophole/matt/adr/`. См. `docs/agents/domain.md`.
+
+### Артефакты
+
+Все артефакты скиллов (спеки, тикеты, wayfinder-карты, исследования, ретро)
+сохраняются в `docs/loophole/matt/` — по подкаталогу на фичу/усилие; глоссарий и
+ADR — на верхнем уровне (`GLOSSARY.md`, `adr/`). Постоянные issues остаются в
+GitHub Issues.

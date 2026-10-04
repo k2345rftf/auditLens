@@ -94,7 +94,7 @@ _BUILTIN_LABELS = {
 _SKILL_LABELS = {
     "auditlens-complaints": "жалобы", "auditlens-market": "рынок",
     "auditlens-research": "документы и новости", "auditlens-data": "база данных",
-    "auditlens-loopholes": "уязвимости",
+    "auditlens-loopholes": "лазейки",
 }
 
 

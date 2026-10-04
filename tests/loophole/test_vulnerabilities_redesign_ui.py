@@ -1,4 +1,4 @@
-"""Интерфейс вкладки «Уязвимости» в системе AuditLens (макет 27.09).
+"""Интерфейс вкладки «Лазейки» в системе AuditLens (макет 27.09).
 
 Страница собирается из настоящих loophole.jsx / loophole.css и vendor-React;
 API подменено заглушкой, которая записывает каждый запрос в window.__calls.
@@ -211,7 +211,7 @@ def _last_catalog(page):
 
 def test_head_tabs_and_access_follow_server_contexts(browser):
     page = _open(browser)
-    expect(page.get_by_role("heading", name="Аудит уязвимостей", level=1)).to_be_visible()
+    expect(page.get_by_role("heading", name="Лазейки", level=1)).to_be_visible()
     tabs = page.get_by_role("tab")
     expect(tabs).to_have_count(3)
     assert [t.inner_text().split("\n")[0].strip() for t in tabs.all()] == ["База", "Исследовать", "Очередь"]
@@ -228,7 +228,7 @@ def test_head_tabs_and_access_follow_server_contexts(browser):
 
 def test_fail_closed_surfaces_show_no_data(browser):
     denied = _open(browser, authz="deny", wait_list=False)
-    expect(denied.get_by_role("heading", name="Нет доступа к разделу «Аудит уязвимостей»")).to_be_visible()
+    expect(denied.get_by_role("heading", name="Нет доступа к разделу «Лазейки»")).to_be_visible()
     assert not _calls(denied, r"/catalog")
     denied.close()
     broken = _open(browser, authz="error", wait_list=False)
@@ -359,7 +359,7 @@ def test_record_goes_to_audit_case_as_document(browser):
     item = _calls(page, r"/api/cases/7/items", "POST")[-1]["body"]
     assert item["kind"] == "document" and item["url"] == "https://forum.example/t/1"
     assert item["title"] == "Кэшбэк за переводы между своими картами"
-    assert "Уязвимость" in item["note"]
+    assert "Лазейка" in item["note"]
     page.close()
 
 
@@ -414,7 +414,7 @@ def test_history_shows_frozen_classifier_comment_and_expert_decisions(browser):
     timeline = page.locator(".lp-rd .lp-tl")
     # Комментарий модели — замороженный classifier_verdict_reason, а не решение эксперта.
     expect(timeline).to_contain_text("«Исходный комментарий модели»")
-    expect(timeline).to_contain_text("Решение ЦК КС (expert.ivanova): уязвимость")
+    expect(timeline).to_contain_text("Решение ЦК КС (expert.ivanova): лазейка")
     expect(timeline).to_contain_text("«Подтверждено»")
     expect(timeline).to_contain_text("25.09.2026")
     # Без замороженного комментария — запасной verdict_reason записи.
@@ -577,7 +577,7 @@ def test_legacy_source_panel_is_kept_unchanged_and_isolated():
 
 def test_prebuilt_page_runs_without_babel(browser):
     page = _open(browser, compiled=True)
-    expect(page.get_by_role("heading", name="Аудит уязвимостей", level=1)).to_be_visible()
+    expect(page.get_by_role("heading", name="Лазейки", level=1)).to_be_visible()
     assert page.evaluate("typeof window.Babel") == "undefined"
     assert not page._lp_errors
     page.close()
@@ -604,7 +604,7 @@ def test_new_selection_opens_its_first_record_and_arrows_move_through_list(brows
     page.get_by_role("group", name="Тип записи").get_by_role("button", name=re.compile("^Схемы")).click()
     # Карточка прошлой выборки не остаётся: открыта первая запись новой.
     expect(page.locator(".lp-rd .lp-rd-title")).to_have_text("Подмена QR-кода на кассе")
-    page.get_by_role("group", name="Тип записи").get_by_role("button", name="Уязвимости и схемы").click()
+    page.get_by_role("group", name="Тип записи").get_by_role("button", name="Лазейки и схемы").click()
     page.locator(".lp-c-title").first.focus()
     page.keyboard.press("ArrowDown")
     expect(page.locator(".lp-c-title").nth(1)).to_be_focused()
@@ -623,7 +623,7 @@ def test_headline_doubt_and_expert_history_in_the_card(browser):
     expect(reader).to_contain_text("Копии")
     page.locator(".lp-c", has_text="Льготный период").click()
     expect(reader.locator(".lp-tl")).to_contain_text(
-        "Решение ЦК КС (expert.petrov): не подтверждено → уязвимость")
+        "Решение ЦК КС (expert.petrov): не подтверждено → лазейка")
     expect(reader.locator(".lp-tl")).to_contain_text("«Перепроверил: механизм работает»")
     page.close()
 

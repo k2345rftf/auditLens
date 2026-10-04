@@ -734,9 +734,9 @@ const BF_KIND={
   tariff_move:{tag:"Тарифы"},
   rate_move:{tag:"Ключевая ставка"},
   news_alert:{tag:"Новость"},
-  loophole:{tag:"Уязвимости · Сбер"},
+  loophole:{tag:"Лазейки · Сбер"},
   bank_rating:{tag:"Банки · рейтинг"},
-  exploit:{tag:"Уязвимости"},
+  exploit:{tag:"Лазейки"},
 };
 
 // ── мост телеметрии для компонентов ──────────────────────────────────────────
@@ -9775,7 +9775,7 @@ function LoopholePage({record}){
   useEffect(()=>{ want.current=record||null; send(); },[record]); // eslint-disable-line
   return <section className="surface loophole-page" style={{padding:0,overflow:"hidden"}}>
     <iframe ref={fr} src="/static/loophole/loophole.html"
-            title="Аудит уязвимостей"
+            title="Лазейки и мошеннические схемы"
             onLoad={e=>{ try{ const w=e.currentTarget.contentWindow;
               ["pointerdown","pointermove","keydown","wheel","scroll","touchstart"].forEach(n=>
                 w.addEventListener(n,()=>{ if(_trkInput)_trkInput(); },{passive:true,capture:true}));
@@ -10041,7 +10041,7 @@ const AD_CSS=`
 
 `;
 const AD_PAGE_RU={overview:"Новостные обзоры",foryou:"Для вас",market:"Рынок · позиция",sber:"Сбер/Рынок",reviews:"Аудит отзывов",
-  ai:"ИИ-помощник",knowledge:"База знаний",loophole:"Аудит уязвимостей",banks:"Банки",sources:"Источники",
+  ai:"ИИ-помощник",knowledge:"База знаний",loophole:"Лазейки",banks:"Банки",sources:"Источники",
   quality:"Качество",profile:"Профиль",pulse:"Пульс"};
 const adFmtS=(s)=>{ s=Math.round(s||0); if(s<60)return s+"с";
   if(s<3600)return Math.round(s/60)+"м"; return (s/3600).toFixed(1).replace(".",",")+"ч"; };
@@ -10458,7 +10458,7 @@ const PU_TRIGGER={gate:"еженедельная проверка","gate-rollbac
   after:"после переработки"};
 // в наборе вопросов (и в истории прогонов) разделы названы по-старому
 const PU_EVAL_TAB={"Обзор":"Новостные обзоры","Отзывы":"Аудит отзывов","Рынок":"Рынок · позиция",
-  "Уязвимости":"Аудит уязвимостей"};
+  "Уязвимости":"Лазейки","Аудит уязвимостей":"Лазейки"};
 function PuAgentEval(){
   const me=useMe();
   const[d,setD]=useState(null);
@@ -11455,7 +11455,7 @@ function PulsePage(){
 // «Рынок · позиция» — режим «Новостных обзоров» (OvSeg), группа «Данные» свёрнута.
 const NAV=[
   {id:"reviews", label:"Аудит отзывов",    icon:Ic.msg,    group:"Анализ", was:"Отзывы"},
-  {id:"loophole",label:"Аудит уязвимостей",icon:Ic.shield, group:"Анализ", was:"Уязвимости"},
+  {id:"loophole",label:"Лазейки",         icon:Ic.shield, group:"Анализ", was:"Аудит уязвимостей"},
   {id:"overview",label:"Новостные обзоры", icon:Ic.news,   group:"Анализ", was:"Обзор"},
   {id:"ai",      label:"ИИ-помощник",      icon:Ic.spark,  group:"Анализ", was:"ИИ-аналитик"},
   {id:"knowledge",label:"База знаний",icon:Ic.src,    group:"Данные"},
@@ -11469,9 +11469,9 @@ const PAGES_FN={overview:OverviewPage,foryou:ForYouPage,market:MarketPage,sber:S
 // Номера синхронизированы с порядком в меню; итог берётся из NAV, а не хардкодом
 // Названия разделов для крошки в шапке. Номер берётся из порядка меню (navOrder),
 // а не пишется здесь: захардкоженные номера разошлись с меню после перестановки
-// вкладок («Уязвимости» в меню 05, в шапке было 06).
+// вкладок («Лазейки» в меню 05, в шапке было 06).
 const PAGE_LABELS={overview:"Новостные обзоры",foryou:"Для вас",market:"Рынок · позиция",sber:"Рынок · позиция",
-  reviews:"Аудит отзывов",ai:"ИИ-помощник",knowledge:"База знаний",loophole:"Аудит уязвимостей",banks:"Банки",
+  reviews:"Аудит отзывов",ai:"ИИ-помощник",knowledge:"База знаний",loophole:"Лазейки",banks:"Банки",
   sources:"Источники",profile:"Профиль",pulse:"Пульс"};
 // до этой даты в меню показывается заметка о переименовании (пока её не закрыли)
 const RENAMED_UNTIL="2026-10-15";
