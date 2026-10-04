@@ -34,7 +34,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .record .verdict {{ margin-top: 4px; }}
   .loophole {{ color: #b03a2e; }}
 </style></head><body>
-<h1>Отчёт: лазейки и уязвимости</h1>
+<h1>Отчёт: лазейки и мошеннические схемы</h1>
 <div class="meta">Сформирован: {generated_at}</div>
 {records_html}
 </body></html>"""

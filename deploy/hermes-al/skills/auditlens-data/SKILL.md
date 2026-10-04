@@ -1,6 +1,6 @@
 ---
 name: auditlens-data
-description: "Use when ready AuditLens tools are not enough and you need SQL over the AuditLens database (tariff history, key rate, documents, news, «Аудит уязвимостей» records) — schema, traps, alsql."
+description: "Use when ready AuditLens tools are not enough and you need SQL over the AuditLens database (tariff history, key rate, documents, news, «Лазейки» records) — schema, traps, alsql."
 version: 2.0.0
 author: AuditLens
 license: proprietary
@@ -15,7 +15,7 @@ metadata:
 ## Overview
 Сначала — готовые инструменты `mcp__auditlens__*`: они считают так же, как
 вкладки. SQL — когда вопрос нестандартный: история изменения тарифа,
-ключевая ставка по датам, выборка по базе знаний, записи раздела «Аудит уязвимостей».
+ключевая ставка по датам, выборка по базе знаний, записи раздела «Лазейки».
 
 Два пути:
 - `mcp__auditlens__sql(query)` — SELECT, транзакция только для чтения, JSON до
@@ -29,7 +29,7 @@ metadata:
 ## When to Use
 - Динамика условий продукта во времени, «когда Сбер менял ставку».
 - Ключевая ставка ЦБ на дату, спред к ней.
-- Нестандартные срезы раздела «Аудит уязвимостей» (обычные вопросы — auditlens-loopholes).
+- Нестандартные срезы раздела «Лазейки» (обычные вопросы — auditlens-loopholes).
 - Don't use for: числа жалоб (только инструменты жалоб), ранг на рынке
   (`market_position`).
 
@@ -46,13 +46,13 @@ metadata:
 | `document`, `document_chunk` | база знаний | document_id, bank_id, url, title, doc_type, content_text, fetched_at; chunk: idx, text |
 | `news_item` | лента новостей | ts, source, title, body, value (важность 0–10), s2 (jsonb: summary, sber, idea, request) |
 | `daily_digest` | выпуски раздела «Новостные обзоры» | digest_date, section (headline, news, reviews_pulse, reviews_brief, tariff_moves, update), payload jsonb |
-| `loophole_record` | записи раздела «Аудит уязвимостей» | record_id, title, snippet, raw_text, url, domain, bank_slug, keyword, is_loophole, verdict_confidence, verdict_reason, classification, status, collected_at, published_at |
+| `loophole_record` | записи раздела «Лазейки» | record_id, title, snippet, raw_text, url, domain, bank_slug, keyword, is_loophole, verdict_confidence, verdict_reason, classification, status, collected_at, published_at |
 
 category (enum): deposit, savings_account, credit, mortgage, card_credit,
 card_debit, auto_loan, rko, microloan, refinance, business_loan, acquiring,
 insurance_*, invest_*, … Сбер: `bank.is_sber` или `slug='sberbank'`.
 
-## «Аудит уязвимостей» (лазейки)
+## «Лазейки»
 Вопросы о лазейках — навык auditlens-loopholes и инструмент mcp__auditlens__loopholes.
 SQL по `loophole_record` — только для нестандартных срезов (is_loophole = true,
 период по collected_at, статус preliminary = оценка модели).
@@ -68,4 +68,4 @@ SQL по `loophole_record` — только для нестандартных с
 ## Verification Checklist
 - [ ] Фильтр по действующим условиям и активным продуктам, где нужно.
 - [ ] Число в ответе — из результата запроса, с периодом.
-- [ ] Для раздела «Аудит уязвимостей» — оговорка «предварительные оценки модели».
+- [ ] Для раздела «Лазейки» — оговорка «предварительные оценки модели».

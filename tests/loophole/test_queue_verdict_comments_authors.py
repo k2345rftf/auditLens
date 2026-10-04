@@ -387,7 +387,7 @@ def test_decision_labels_cover_all_decision_types():
     """Матрица «запись с решениями ЦК»: все три типа решения имеют метки."""
     jsx = _norm(_jsx())
     mapping = _norm(
-        'const decisionLabel = (value) => ({ vulnerability: "Уязвимость", '
+        'const decisionLabel = (value) => ({ vulnerability: "Лазейка", '
         'fraud_scheme: "Мошенническая схема", not_confirmed: "Не подтверждено", '
         "}[value] || value);"
     )

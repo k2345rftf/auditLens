@@ -463,7 +463,7 @@ def _provenance(kind: str, d: dict) -> str:
         return (f'{src}' + (f' · ещё {n - 1} ист.' if n > 1 else "")
                 + (f' · продолжение сюжета от {_dm(cont.get("date"))}' if cont else ""))
     if kind == "loophole":
-        return "раздел «Аудит уязвимостей» · предварительная классификация"
+        return "раздел «Лазейки» · предварительная классификация"
     if kind == "bank_rating":
         return f'народный рейтинг banki.ru · {d.get("base_date")} → {d.get("as_of")}, держится 2 дня'
     return ""
@@ -684,7 +684,7 @@ def _evidence_line(ev: dict | None) -> str:
 
 
 def _new_sber_loopholes() -> list[dict]:
-    """Свежие находки «Уязвимостей» по Сберу для повода выпуска.
+    """Свежие находки раздела «Лазейки» по Сберу для повода выпуска.
 
     Уверенность в базе — numeric: без float() в поводе оказывался Decimal, и
     28.09 заголовок выпуска не сохранился (показан вчерашний). Заголовок находки

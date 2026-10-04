@@ -1,4 +1,4 @@
-/* loophole.jsx — вкладка «Уязвимости» в системе AuditLens: база (сводка, фильтры,
+/* loophole.jsx — вкладка «Лазейки» в системе AuditLens: база (сводка, фильтры,
    список и карточка записи, Excel, аудит-дела), исследование агента одной
    колонкой, очередь решений ЦК КС и панель «Доступ». Права решает сервер. */
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
@@ -370,7 +370,7 @@ function useFocusLayer(active, containerRef, onClose, initialFocusRef, restoreFa
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-// ── Вкладка «Уязвимости» в системе AuditLens: общие элементы интерфейса ─────
+// ── Вкладка «Лазейки» в системе AuditLens: общие элементы интерфейса ─────────
 // Иконки — inline SVG (правило системы: никаких эмодзи), 16×16, штрих 1.5.
 const LP_ICONS = {
   search: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/>',
@@ -403,10 +403,10 @@ function Icon({name, size = 16, className = ""}) {
               aria-hidden="true" dangerouslySetInnerHTML={{__html: LP_ICONS[name] || ""}} />;
 }
 
-// Классы записи: уязвимость — красный (риск), схема — фиолетовый (--legal),
+// Классы записи: лазейка — красный (риск), схема — фиолетовый (--legal),
 // не подтверждено — нейтральный, без вердикта — пунктир.
 const KIND_LABELS = {
-  vulnerability: ["Уязвимость", "neg"],
+  vulnerability: ["Лазейка", "neg"],
   fraud_scheme: ["Мошенническая схема", "legal"],
   not_confirmed: ["Не подтверждено", "neu"],
   none: ["Без вердикта", "dash"],
@@ -476,7 +476,7 @@ function LoopholeApp() {
   const [fTo, setFTo] = useState("");
   const [fVerification, setFVerification] = useState("all");
   // По умолчанию — только находки: на проде 99% базы — «не подтверждено»,
-  // и уязвимости со схемами тонули среди них.
+  // и лазейки со схемами тонули среди них.
   const [fClassification, setFClassification] = useState("confirmed");
   // Порядок базы — сортирует сервер: сначала новые или по вероятности модели.
   const [fSort, setFSort] = useState("new");
@@ -1957,7 +1957,7 @@ function LoopholeApp() {
   // Метки решений ЦК КС (loophole_verification_decision.decision) для карточки
   // очереди и модалки вердикта.
   const decisionLabel = (value) => ({
-    vulnerability: "Уязвимость",
+    vulnerability: "Лазейка",
     fraud_scheme: "Мошенническая схема",
     not_confirmed: "Не подтверждено",
   }[value] || value);
@@ -2018,7 +2018,7 @@ function LoopholeApp() {
   });
   const agentBusy = clarifySubmitting || chatLoading;
 
-  // ══ Вкладка «Уязвимости» в системе AuditLens (макет, согласованный 27.09) ══
+  // ══ Вкладка «Лазейки» в системе AuditLens (макет, согласованный 27.09) ══
   // База — сводка, фильтры, список и карточка записи; «Исследовать» — одна
   // колонка с ходом работы и находками; «Очередь» — решение на карточке;
   // «Доступ» — панель администратора. Права по-прежнему решает сервер.
@@ -2129,7 +2129,7 @@ function LoopholeApp() {
       .catch(() => {});
   }, [phase, chatLoading, workspaceId, researchReadOnly]);
 
-  // Суть — только уязвимостям и схемам, один вызов модели на запись (сервер
+  // Суть — только лазейкам и схемам, один вызов модели на запись (сервер
   // сохраняет результат). «Не подтверждено» модель не трогает.
   const ensureSummary = (record) => {
     if (!record) return;
@@ -2260,7 +2260,7 @@ function LoopholeApp() {
     const bits = [KIND_LABELS[kind][0], bankName(record.bank_slug) !== "—" ? bankName(record.bank_slug) : null,
       detail.summary || record.summary || record.verdict_reason].filter(Boolean);
     return {kind: "document", url: record.url || null,
-      title: (record.headline || record.title || record.snippet || "Запись раздела «Аудит уязвимостей»").slice(0, 300),
+      title: (record.headline || record.title || record.snippet || "Запись раздела «Лазейки»").slice(0, 300),
       note: bits.join(" · ").slice(0, 900)};
   };
   const addToCase = async (caseRow, record) => {
@@ -2487,7 +2487,7 @@ function LoopholeApp() {
     return (
       <div className="lp-state">
         <div className="lp-state-ic"><Icon name="shield" size={20} /></div>
-        <h1 className="lp-state-t">Нет доступа к разделу «Аудит уязвимостей»</h1>
+        <h1 className="lp-state-t">Нет доступа к разделу «Лазейки»</h1>
         <p className="lp-state-x">Учётная запись не авторизована. Обратитесь к администратору модуля.</p>
       </div>
     );
@@ -2516,7 +2516,7 @@ function LoopholeApp() {
     <header className="lp-ph">
       <div className="lp-ph-main">
         <div className="lp-eyebrow">Анализ · схемы и лазейки</div>
-        <h1 className="lp-ph-t">Аудит уязвимостей</h1>
+        <h1 className="lp-ph-t">Лазейки</h1>
         <p className="lp-ph-meta">
           Лазейки и мошеннические схемы в продуктах банков. Записи собираются из обсуждений
           на форумах и в соцсетях, новостей и сайтов банков; модель отмечает возможные находки,
@@ -2600,7 +2600,7 @@ function LoopholeApp() {
         value: totals && totals.new_7d,
         sub: totals ? `на прошлой неделе: ${fmtInt(totals.new_prev_7d)}` : "…",
         onClick: () => applyPeriod(fPeriod === "7" ? "all" : "7")})}
-      {kpi({on: fClassification === "vulnerability", label: "Уязвимости", tone: "neg",
+      {kpi({on: fClassification === "vulnerability", label: "Лазейки", tone: "neg",
         value: totals && totals.vulnerability,
         sub: totals ? reviewedLine(totals.vulnerability, totals.awaiting_vulnerability) : "…",
         onClick: () => setFClassification(c => c === "vulnerability" ? "confirmed" : "vulnerability")})}
@@ -2666,8 +2666,8 @@ function LoopholeApp() {
       </div>
       <div className={"lp-frow" + (showFilters ? " lp-frow-show" : "")}>
         {seg("Тип записи", fClassification, [
-          ["confirmed", "Уязвимости и схемы", types && types.confirmed],
-          ["vulnerability", "Уязвимости", types && types.vulnerability],
+          ["confirmed", "Лазейки и схемы", types && types.confirmed],
+          ["vulnerability", "Лазейки", types && types.vulnerability],
           ["fraud_scheme", "Схемы", types && types.fraud_scheme],
           ["not_confirmed", "Не подтверждено", types && types.not_confirmed],
           ["all", "Все", types && types.all],
@@ -2939,7 +2939,7 @@ function LoopholeApp() {
     const awaiting = !manual && !r.reviewed && (r.awaiting === true || r.is_loophole === true);
     const line = positive ? (r.summary || r.verdict_reason) : null;
     // Вероятность — только у находок: у «не подтверждено» она читалась бы
-    // как «вероятно уязвимость».
+    // как «вероятно лазейка».
     const conf = manual || !positive ? null : pctOf(r.verdict_confidence);
     const bank = knownBank(r.bank_slug);
     return (
@@ -3024,7 +3024,7 @@ function LoopholeApp() {
       {notConfirmedHidden > 0 && (
         <div className="lp-hid">
           <span>Ещё {fmtInt(notConfirmedHidden)} {lpPlural(notConfirmedHidden, "запись", "записи", "записей")} без
-            находки скрыты: модель не подтвердила уязвимость или схему.</span>
+            находки скрыты: модель не подтвердила лазейку или схему.</span>
           <button type="button" className="lp-btn-text" onClick={() => setFClassification("all")}>Показать все</button>
         </div>
       )}
@@ -3061,7 +3061,7 @@ function LoopholeApp() {
             <div className="lp-state-ic"><Icon name="search" size={20} /></div>
             <p className="lp-state-t">Ничего не нашлось</p>
             <p className="lp-state-x">{fClassification === "confirmed" && notConfirmedHidden
-              ? "Среди уязвимостей и схем совпадений нет, но есть записи без находки. Покажите все или начните исследование по этой теме."
+              ? "Среди лазеек и схем совпадений нет, но есть записи без находки. Покажите все или начните исследование по этой теме."
               : "Под выбранные фильтры не подходит ни одна запись. Уберите часть фильтров или начните исследование по этой теме."}</p>
             <div className="lp-state-a">
               <button type="button" className="lp-btn" onClick={resetAll}>Сбросить фильтры</button>
@@ -3091,7 +3091,7 @@ function LoopholeApp() {
     const d = draftOf(r.record_id);
     const ok = !!(d.cls && (d.comment || "").trim());
     const modelKind = recordKind(r);
-    const options = [["vulnerability", "Уязвимость", "1"], ["fraud_scheme", "Мошенническая схема", "2"],
+    const options = [["vulnerability", "Лазейка", "1"], ["fraud_scheme", "Мошенническая схема", "2"],
       ["not_confirmed", "Не подтверждено", "3"]];
     return (
       <div className="lp-dec">
@@ -3201,7 +3201,7 @@ function LoopholeApp() {
 
   // ── Исследование ───────────────────────────────────────────────────────────
   const SUGGESTIONS = ["Схемы с оплатой по QR-коду в СБП", "Как обходят лимиты на снятие наличных",
-    "Лазейки в бонусах за приглашение друзей", "Уязвимости в кэшбэке за оплату ЖКУ"];
+    "Лазейки в бонусах за приглашение друзей", "Лазейки в кэшбэке за оплату ЖКУ"];
   const toolCount = (name, failed = false) => toolEvents.filter(e => e.name === name
     && (failed ? e.kind === "result" && e.status === "failed" : e.kind === "call")).length;
   const searchCalls = toolCount("audit_web_search");
@@ -3412,7 +3412,7 @@ function LoopholeApp() {
       <div className="lp-eyebrow">Новое исследование</div>
       <h2>Что проверить?</h2>
       <p>Агент ищет обсуждения на форумах и сайтах банков, читает найденные страницы и размечает
-        находки: уязвимость, мошенническая схема или ни то ни другое. Находки попадают в общую базу
+        находки: лазейка, мошенническая схема или ни то ни другое. Находки попадают в общую базу
         и ждут решения эксперта ЦК КС.</p>
       <div className="lp-sugg">
         {SUGGESTIONS.map(s => (
@@ -3605,9 +3605,9 @@ function LoopholeApp() {
       <div className="lp-pop" style={style} role="dialog" aria-label="Как читать вердикт">
         <p className="lp-pop-p"><b>Вердикт</b> сначала ставит модель при сборе записи. Окончательный выносит
           эксперт ЦК КС; пока он не решил, запись помечена «ждёт проверки».</p>
-        <p className="lp-pop-p"><b>Вероятность</b> — насколько запись похожа на уязвимость или схему по
+        <p className="lp-pop-p"><b>Вероятность</b> — насколько запись похожа на лазейку или схему по
           оценке модели. Это не вероятность ущерба.</p>
-        <p className="lp-pop-p"><b>Суть</b> модель составляет только для уязвимостей и схем. У записей без
+        <p className="lp-pop-p"><b>Суть</b> модель составляет только для лазеек и схем. У записей без
           находки остаётся короткий комментарий классификатора из того же вызова, что и вердикт.</p>
       </div>
     );

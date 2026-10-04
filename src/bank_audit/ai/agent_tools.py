@@ -631,7 +631,7 @@ _LH_NOISE = re.compile(r"\b(лазейк\w*|уязвим\w*|схем\w*|сбер
 
 def tool_loopholes(query: str, bank: str = SBER, days: int | None = None,
                    limit: int = 12) -> str:
-    """Раздел «Уязвимости»: записи, признанные лазейками, штатным поиском модуля."""
+    """Раздел «Лазейки»: записи, признанные лазейками, штатным поиском модуля."""
     from ..loophole import repository as lr
     limit = max(1, min(int(limit or 12), 30))
     q = re.sub(r"\s+", " ", _LH_NOISE.sub(" ", query or "")).strip() or (query or "")
@@ -685,7 +685,7 @@ def tool_loopholes(query: str, bank: str = SBER, days: int | None = None,
                              AS all_banks_preliminary
                     FROM loophole_record""", {"s": slug or ""})[0]
     return out({
-        "section": "Раздел «Аудит уязвимостей»: схемы обхода условий продуктов, найденные в интернете и "
+        "section": "Раздел «Лазейки»: схемы обхода условий продуктов, найденные в интернете и "
                    "отзывах и признанные моделью лазейками",
         "query": query, "searched_for": q, "bank": bank, "days": days,
         "stats": stats,
@@ -787,8 +787,8 @@ TOOLS: list[ToolSpec] = [
              "сайтами, fresh_days — только свежее."),
     ToolSpec("read_page", "Чтение страницы", tool_read_page,
              "Текст страницы или PDF по ссылке (с отбором мест по query) и ссылки на файлы."),
-    ToolSpec("loopholes", "Аудит уязвимостей", tool_loopholes,
-             "Раздел «Аудит уязвимостей»: лазейки — схемы, которыми клиенты, партнёры или "
+    ToolSpec("loopholes", "Лазейки", tool_loopholes,
+             "Раздел «Лазейки»: лазейки — схемы, которыми клиенты, партнёры или "
              "мошенники обходят условия продуктов банка (продление грейса, обход лимитов и "
              "комиссий, двойные бонусы, вывод кредитных средств). Поиск по словам и смыслу "
              "(query: продукт или механика, например «кредитная карта», «грейс», «снятие "

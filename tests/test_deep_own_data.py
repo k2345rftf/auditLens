@@ -164,7 +164,7 @@ def test_dossier_voice_puts_analytics_first_and_loopholes_apart(fake_tools):
     assert not any(f.stance == "loophole" for f in voice)
     rendered = dossier.render_facts(voice[:1], {"sberbank": "Сбербанк"})
     assert "аналитика жалоб AuditLens" in rendered
-    assert "Лазейки и уязвимости" in dossier.outline(PLAN, reg)
+    assert "Лазейки и мошеннические схемы" in dossier.outline(PLAN, reg)
 
 
 def test_sources_ui_marks_auditlens_pages():
